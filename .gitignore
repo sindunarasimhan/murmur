@@ -1,0 +1,31 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+node_modules/
+.expo/
+dist/
+build/
+web-build/
+coverage/
+.murmur-data/
+.idea/
+.vscode/
+*.log
+*.tsbuildinfo
+
+# Expo / React Native generated files
+expo-env.d.ts
+.metro-health-check*
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.pem
+
+# Native projects are generated on demand by Expo prebuild.
+/ios/
+/android/

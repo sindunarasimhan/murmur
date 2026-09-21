@@ -1,0 +1,19 @@
+name: murmur
+services:
+  postgres:
+    image: postgres:17-alpine
+    ports:
+      - "127.0.0.1:55432:5432"
+    environment:
+      POSTGRES_DB: murmur
+      POSTGRES_USER: murmur
+      POSTGRES_PASSWORD: murmur-local-development
+    volumes:
+      - murmur-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U murmur -d murmur"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+volumes:
+  murmur-postgres:

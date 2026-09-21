@@ -1,0 +1,57 @@
+{
+  "expo": {
+    "name": "Murmur",
+    "slug": "murmur",
+    "version": "0.1.0",
+    "orientation": "default",
+    "icon": "./assets/images/app-icon.png",
+    "scheme": "murmur",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/splash-mark.png",
+        "backgroundColor": "#F3EDE3"
+      },
+      "predictiveBackGestureEnabled": true
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "server",
+      "favicon": "./assets/images/app-icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#F3EDE3",
+          "image": "./assets/images/splash-mark.png",
+          "imageWidth": 176,
+          "resizeMode": "contain",
+          "dark": {
+            "backgroundColor": "#F3EDE3",
+            "image": "./assets/images/splash-mark.png"
+          }
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Murmur uses the microphone for live voice requests and, while an episode is playing, to detect when you say Hey Murmur. Audio is not stored.",
+          "enableBackgroundPlayback": false,
+          "enableBackgroundRecording": false
+        }
+      ],
+      "expo-asset",
+      "expo-secure-store",
+      "expo-image"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

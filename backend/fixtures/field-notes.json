@@ -1,0 +1,40 @@
+{
+  "id": "small-places",
+  "title": "Small places, big possibilities",
+  "showTitle": "Murmur Field Notes",
+  "description": "An original short episode about neighborhood parks. Narrated with a synthetic voice for the Murmur listening prototype.",
+  "segments": [
+    {
+      "id": "opening",
+      "text": "Welcome to Murmur Field Notes. Today, a small idea about cities: a good public place does not have to be a grand destination. Imagine a tiny neighborhood park, tucked between an apartment building and a corner shop. What would make you stop there?",
+      "startSeconds": 0,
+      "endSeconds": 14.351875
+    },
+    {
+      "id": "invitation",
+      "text": "Start with an invitation to stay. A bench in the shade, a clear path, and a place to put your coffee can turn leftover space into somewhere useful. The point is not the number of features. It is whether a person passing by can picture spending ten comfortable minutes there.",
+      "startSeconds": 14.851875,
+      "endSeconds": 29.993458333333333
+    },
+    {
+      "id": "tradeoffs",
+      "text": "Now consider a tradeoff. An open plaza leaves room for events, but it might offer little shelter on a hot afternoon. Planting more trees makes shade possible, while also asking for space, water, and care. A thoughtful design begins with the people who will use the place and the people who will maintain it.",
+      "startSeconds": 30.493458333333333,
+      "endSeconds": 47.810541666666666
+    },
+    {
+      "id": "experiment",
+      "text": "Before rebuilding the whole site, try a small experiment. Put movable chairs in one corner for a week. Watch where people sit and where they move the chairs. Ask what would make them return. These observations can guide the next change, though one week will not represent every season or every neighbor.",
+      "startSeconds": 48.310541666666666,
+      "endSeconds": 64.80095833333333
+    },
+    {
+      "id": "closing",
+      "text": "The larger lesson is to make room for learning. A park is not finished when the drawing is finished. It becomes a shared place through everyday use and steady care. Next time you pass a small public space, notice what invites you to linger. This has been Murmur Field Notes.",
+      "startSeconds": 65.30095833333333,
+      "endSeconds": 80.24341666666666
+    }
+  ],
+  "version": "24217596fb132bdc50efbf97652b4bc8078fffd32c6f9ba139894375167e46df",
+  "durationSeconds": 80.74341666666666
+}
