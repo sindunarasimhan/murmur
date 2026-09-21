@@ -16,6 +16,7 @@ import { transaction } from './database';
 import { VoiceGateway } from './voice-gateway';
 import { ContinuousVoiceGateway } from './continuous-voice';
 import { CatalogService } from './catalog-service';
+import { createCatalogInterpreter, type CatalogInterpreter } from './catalog-interpreter';
 
 function bearer(request: FastifyRequest) {
   const authorization = request.headers.authorization;
@@ -23,13 +24,13 @@ function bearer(request: FastifyRequest) {
   return request.headers.cookie?.split(';').map((value) => value.trim()).find((value) => value.startsWith('murmur_identity='))?.slice('murmur_identity='.length);
 }
 const sessionId = (request: FastifyRequest) => z.uuid().parse((request.params as { id: string }).id);
-export async function createApp(options: { config: BackendConfig; pool: Pool; objects: ObjectStore; intelligence?: Intelligence; speech?: typeof synthesizeAudio }) {
+export async function createApp(options: { config: BackendConfig; pool: Pool; objects: ObjectStore; intelligence?: Intelligence; catalogInterpreter?: CatalogInterpreter; speech?: typeof synthesizeAudio }) {
   const { config, pool, objects } = options;
   const repository = new Repository(pool, config);
   const listening = new ListeningService(repository, options.intelligence ?? createIntelligence(config));
   const voice = new VoiceGateway(repository, config);
   const continuousVoice = new ContinuousVoiceGateway(repository, config);
-  const catalog = new CatalogService(repository, config);
+  const catalog = new CatalogService(repository, options.catalogInterpreter ?? createCatalogInterpreter(config.providers.typesafe));
   const app = Fastify({ logger: false, bodyLimit: 16 * 1024, requestTimeout: 30_000 });
   await app.register(websocket, { options: { maxPayload: 128 * 1024 } });
   app.addHook('onRequest', async (request, reply) => {
@@ -82,7 +83,7 @@ export async function createApp(options: { config: BackendConfig; pool: Pool; ob
   app.delete('/v2/live-voice', async (request) => { continuousVoice.cancel(await owner(request)); return { stopped: true }; });
   app.post('/v2/sessions', async (request) => {
     const input = z.object({ episodeId: z.string().regex(/^(small-places|lenny-[a-z0-9_-]+)$/) }).strict().parse(request.body);
-    if (config.focusEpisodeId && input.episodeId !== config.focusEpisodeId) throw new ServiceError(409, 'focus_episode', 'We’re listening to Brian Halligan in this version. Say play Lenny.');
+    if (config.focusEpisodeId && input.episodeId !== config.focusEpisodeId) throw new ServiceError(409, 'focus_episode', 'That episode is not available in the current catalog.');
     return repository.openSession(await owner(request), input.episodeId);
   });
   app.get('/v2/sessions/:id', async (request) => repository.session(await owner(request), sessionId(request)));

@@ -18,6 +18,10 @@ Exact playback commands remain in code. Jev cannot invent timestamps or execute 
 
 Catalog selection also requires a positive match between the requested show, guest, or subject and the available catalog. Having only one candidate must not substitute Brian for an unrelated show such as The Daily.
 
+`catalog-interpreter.ts` owns Jev questions and decision thresholds and returns a typed intent. Its episode arguments are generated from current catalog metadata. `CatalogService` validates the selected ID, resolves saved listening, and constructs announcements from the selected record; it contains no show-name or guest-name matching rules. Questions without a current episode clarify instead of silently starting the only candidate. “Stop listening” shuts down microphone capture locally, including when the network is unavailable.
+
+`npm run eval:catalog` exercises the live Jev adapter with two fictional shows, including guest/topic selection, missing shows, negation, one-candidate substitution, resume, and an affirmative follow-up. It uses provider credits without changing the database. Unit tests separately cover invalid IDs, cancellation, ambiguous guests, metadata changes, and unavailable saved episodes.
+
 Semantic ad skips require both a confident skip action and a separately evaluated, explicit advertising target in the utterance. An ad in the retrieved context does not turn “skip the boring part” into permission to skip it. Questions, negations, and future automatic-skip preferences do not execute a skip. These cases are checked with live Jev evaluations.
 
 ## Catalog and provenance

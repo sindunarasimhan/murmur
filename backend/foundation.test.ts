@@ -59,6 +59,7 @@ test('PostgreSQL, preparation jobs, and authenticated listening work together', 
     },
   };
   const { app, repository } = await createApp({ config, pool, objects, intelligence,
+    catalogInterpreter: async ({ episodes }) => ({ kind: 'select', episodeId: episodes[0]!.id }),
     speech: async () => { speechCalls += 1; return new Uint8Array([73, 68, 51, 1, 2, 3]); },
   });
   await app.ready();

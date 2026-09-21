@@ -118,7 +118,7 @@ export class LennyVoiceController {
   final(text: string, item: string) {
     if (!this.state.microphone || this.disposed) return;
     if (/^(?:hey[ ,]+murmur[ ,.!?]*)?(?:please )?(?:stop listening|turn off (?:the )?(?:microphone|mic))[.!?]*$/i.test(text.trim())) {
-      this.itemModes.set(item, false); void this.submit('stop listening'); return;
+      this.itemModes.set(item, false); void this.shutdown(true); return;
     }
     if (!this.itemModes.has(item)) this.partial(text, item);
     if (!this.itemModes.get(item) || this.item !== item || !['listening', 'followup'].includes(this.state.phase)) return;

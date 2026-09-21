@@ -88,8 +88,10 @@ test('explicit pause never resumes after silence and stop listening shuts down c
     await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(50);
     await s.controller.submit('pause'); await delay(50);
     assert(!s.playing); assert(s.mic); assert.equal(s.controller.state.phase, 'paused');
+    s.ports.api.resolve = async () => { throw new Error('Network unavailable'); };
     s.controller.final('Stop listening.', 'stop'); await delay();
     assert(!s.mic); assert(!s.playing); assert.equal(s.controller.state.episode, undefined);
+    assert.equal(s.controller.state.phase, 'idle');
   } finally { await s.controller.dispose(); }
 });
 test('a late answer cannot restart speech or playback after shutdown', async () => {
