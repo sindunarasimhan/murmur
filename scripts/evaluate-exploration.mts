@@ -9,6 +9,10 @@ import type { WebSocketLike } from '../src/services/voice/realtime-transcription
 const origin = process.env.MURMUR_BACKEND_URL ?? 'http://127.0.0.1:4545';
 const expo = process.env.MURMUR_EXPO_URL ?? 'http://127.0.0.1:8081';
 const audioInput = process.argv.includes('--audio');
+const overlap = process.argv.includes('--overlap');
+assert(!overlap || audioInput, '--overlap requires --audio');
+const backgroundGain = Number(process.env.MURMUR_TEST_BACKGROUND_GAIN ?? 0.3);
+assert(Number.isFinite(backgroundGain) && backgroundGain >= 0 && backgroundGain <= 2);
 const ffmpeg = process.env.FFMPEG_PATH;
 assert(!audioInput || ffmpeg, 'Set FFMPEG_PATH for generated-speech input.');
 let token = '';
@@ -47,6 +51,7 @@ let replies = 0;
 const answers: string[] = [];
 const evidence: string[][] = [];
 const transcripts: string[] = [];
+let background: Buffer | undefined;
 let sessionId = '';
 const api: ListeningPorts['api'] = {
   resolve: (utterance, currentEpisodeId, history) => request('/catalog/resolve', { utterance, currentEpisodeId, history }),
@@ -78,8 +83,24 @@ async function utter(text: string, expected: 'followup' | 'playing') {
   const transcriptStart = transcripts.length;
   if (audioInput) {
     const bytes = await pcm(text);
+    if (overlap && playing) {
+      background ??= await pcm('A growing company needs clear decisions. The team has to learn from its customers, hire carefully, and keep improving how people work together.');
+      for (let offset = 0; offset < 48_000 * 3; offset += 4800) {
+        const frame = Buffer.alloc(4800);
+        for (let i = 0; i < frame.length; i += 2) frame.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(background.readInt16LE((offset + i) % (background.length - background.length % 2)) * backgroundGain))), i);
+        transport.append(Uint8Array.from(frame).buffer, 24_000, 1);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
     for (let offset = 0; offset < bytes.length; offset += 4800) {
-      transport.append(Uint8Array.from(bytes.subarray(offset, offset + 4800)).buffer, 24_000, 1);
+      const frame = Buffer.from(bytes.subarray(offset, offset + 4800));
+      if (overlap && playing && background) {
+        for (let i = 0; i + 1 < frame.length; i += 2) {
+          const mixed = frame.readInt16LE(i) + background.readInt16LE((offset + i) % (background.length - background.length % 2)) * backgroundGain;
+          frame.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(mixed))), i);
+        }
+      }
+      transport.append(Uint8Array.from(frame).buffer, 24_000, 1);
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     transport.commit();
@@ -122,6 +143,9 @@ try {
     assert.equal((await api.session(sessionId)).positionSeconds, bookmark);
     console.log(`PASS ${bookmark}: interrupt, three answers, silent pause, natural return to exact bookmark`);
   }
-  console.log(JSON.stringify({ input: audioInput ? 'generated speech through live transcription' : 'text', answers, evidence, transcripts }, null, 2));
+  console.log(JSON.stringify({ input: audioInput ? 'generated speech through live transcription' : 'text', overlap, backgroundGain: overlap ? backgroundGain : undefined, answers, evidence, transcripts }, null, 2));
   console.log('Native microphone, speaker acoustics and audible device playback are not exercised.');
+} catch (error) {
+  console.log(JSON.stringify({ failedInputTranscripts: transcripts }, null, 2));
+  throw error;
 } finally { await controller.dispose(); await request('/identity', {}, 'DELETE'); }
