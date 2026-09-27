@@ -44,6 +44,32 @@ test('wake phrase requires an explicit Hey Murmur and preserves the following re
   assert.equal(wakeRequest('podcast background. Hey, Murmur! What did she mean?'), 'What did she mean?');
   assert.equal(wakeRequest('Hey mur mur, skip this ad'), 'skip this ad');
 });
+test('idle invocation retains wake monitoring and reactivates without a button', async () => {
+  const s = setup(15);
+  try {
+    await s.controller.activate(); await delay(25);
+    assert.equal(s.controller.state.phase, 'idle'); assert(s.mic);
+    s.controller.partial('An unrelated background conversation', 'ambient');
+    s.controller.final('An unrelated background conversation', 'ambient');
+    assert.equal(s.controller.state.phase, 'idle');
+    s.controller.partial('Hey Murmur, play', 'wake');
+    assert.equal(s.controller.state.phase, 'listening');
+    assert.equal(s.controller.state.heard, 'play');
+    s.controller.final('Hey Murmur, play Lenny', 'wake'); await delay();
+    assert(s.playing); assert.equal(s.controller.state.episode?.id, episode.id);
+  } finally { await s.controller.dispose(); }
+});
+test('voice failure accurately reports microphone off and cannot wake until reopened', async () => {
+  const s = setup();
+  try {
+    await s.controller.activate();
+    await s.controller.fail(new Error('Voice is unavailable. Reopen Murmur to try again.'));
+    assert.equal(s.controller.state.phase, 'error'); assert(!s.mic);
+    s.controller.final('Hey Murmur, play Lenny', 'after-error'); await delay();
+    assert(!s.playing); assert.equal(s.controller.state.phase, 'error');
+    await s.controller.activate(); assert(s.mic);
+  } finally { await s.controller.dispose(); }
+});
 test('tap, spoken episode selection, wake interruption, and silence return preserve the exact bookmark', async () => {
   const s = setup();
   try {

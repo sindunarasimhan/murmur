@@ -8,6 +8,8 @@ import { startWebPcmCapture, type WebPcmCapture } from '@/services/voice/web-pcm
 import { PLAYBACK_AUDIO_MODE, RECORDING_AUDIO_MODE } from '@/features/listening/audio-mode';
 import { useAssistantVoice } from '@/features/listening/use-assistant-voice';
 import { LennyVoiceController, type VoiceState } from './voice-controller';
+import { ForegroundVoice } from './foreground-voice';
+import { NativeVoiceCapture } from './native-voice-capture';
 import type { PreparedEpisode } from '../../../shared/listening';
 
 const initial: VoiceState = { phase: 'idle', microphone: false, caption: 'A good conversation starts with listening.', heard: '' };
@@ -32,9 +34,16 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
   const { stream } = useAudioStream({ encoding: 'int16', sampleRate: 24_000, channels: 1, onBuffer });
   const latest = useRef({ speech, stream });
   useEffect(() => { latest.current = { speech, stream }; }, [speech, stream]);
+  const nativeCaptureRef = useRef<NativeVoiceCapture | undefined>(undefined);
 
   useEffect(() => {
     let alive = true;
+    const nativeCapture = nativeCaptureRef.current ??= new NativeVoiceCapture({
+      start: () => latest.current.stream.start(),
+      stop: () => { latest.current.stream.stop(); },
+      recordingMode: () => setAudioModeAsync(RECORDING_AUDIO_MODE),
+      playbackMode: () => setAudioModeAsync(PLAYBACK_AUDIO_MODE),
+    });
     const instance = new LennyVoiceController({
       uuid: Crypto.randomUUID,
       api: listeningApi,
@@ -67,7 +76,7 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
           if (process.env.EXPO_OS !== 'web') {
             const permission = await requestRecordingPermissionsAsync();
             if (generation !== captureGeneration.current) return;
-            if (!permission.granted) throw new Error('Allow microphone access in iPhone Settings, then tap Hey Murmur.');
+            if (!permission.granted) throw new Error('Microphone access is off. Allow it in iPhone Settings, then reopen Murmur.');
           } else {
             // Obtain capture before opening a paid upstream connection. A late
             // permission response after cancellation must immediately release it.
@@ -84,11 +93,7 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
           await live.start();
           if (generation !== captureGeneration.current) { live.stop(); return; }
           if (process.env.EXPO_OS !== 'web') {
-            await latest.current.stream.start();
-            if (generation !== captureGeneration.current) { latest.current.stream.stop(); return; }
-            // Expo's stream starts in record-only mode. Restore play-and-record
-            // afterward so the podcast remains audible while the mic is open.
-            await setAudioModeAsync(RECORDING_AUDIO_MODE);
+            await nativeCapture.start();
           }
         },
         async stop() {
@@ -96,8 +101,8 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
           transcriber.current?.stop(); transcriber.current = undefined;
           const web = capture.current; capture.current = undefined;
           await web?.stop().catch(() => undefined);
-          if (process.env.EXPO_OS !== 'web') { try { latest.current.stream.stop(); } catch { /* Already released. */ } }
-          await setAudioModeAsync(PLAYBACK_AUDIO_MODE).catch(() => undefined);
+          if (process.env.EXPO_OS !== 'web') await nativeCapture.stop();
+          else await setAudioModeAsync(PLAYBACK_AUDIO_MODE);
         },
       },
       speech: {
@@ -114,11 +119,13 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
       },
     });
     controller.current = instance;
-    const foreground = AppState.addEventListener('change', (next) => { if (next === 'background') void instance.shutdown(); });
+    const lifecycle = new ForegroundVoice(instance);
+    const foreground = AppState.addEventListener('change', (next) => lifecycle.changed(next));
+    lifecycle.changed(AppState.currentState);
     const progress = setInterval(() => { void instance.progress(); }, 10_000);
     const fetchController = new AbortController();
     void listeningApi.catalog(fetchController.signal).then((episodes) => { if (alive) { setCount(episodes.length); setFeatured(episodes.length === 1 ? episodes[0] : undefined); } }).catch(() => undefined);
-    return () => { alive = false; fetchController.abort(); foreground.remove(); clearInterval(progress); void instance.dispose(); };
+    return () => { alive = false; fetchController.abort(); foreground.remove(); clearInterval(progress); void lifecycle.dispose(); };
   }, [onBuffer, player]);
   useEffect(() => { if (status.didJustFinish) void controller.current?.ended(); }, [status.didJustFinish]);
   useEffect(() => {

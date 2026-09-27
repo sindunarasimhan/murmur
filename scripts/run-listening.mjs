@@ -62,7 +62,7 @@ try {
     await launch(process.execPath, ['--import', 'tsx', 'scripts/import-lenny.mts']);
   }
   if (!prepared(await ready('/v2/catalog'))) throw new Error('Restart the existing backend to load the current Lenny collection.');
-  console.log('Lenny is ready. Tap “Hey Murmur” on Home and say “Play Lenny.”');
+  console.log('Lenny is ready. Open Murmur, allow microphone access, and say “Play Lenny.” Say “Hey Murmur” to wake listening again.');
   await launch('./script/build_and_run.sh', [process.argv[2] ?? 'start'], { ...process.env,
     MURMUR_SERVICES_STARTED: '1', MURMUR_BACKEND_URL: backend,
   });

@@ -85,7 +85,7 @@ export class LennyVoiceController {
       let deadline: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([this.ports.microphone.start(), new Promise<never>((_, reject) => {
-          deadline = setTimeout(() => reject(new Error('The microphone did not open. Check microphone permission, then tap Hey Murmur again.')), 25_000);
+          deadline = setTimeout(() => reject(new Error('The microphone did not open. Check microphone permission and your connection, then reopen Murmur.')), 25_000);
         })]);
       } finally { clearTimeout(deadline); }
       // Capture adapters release their own cancelled generation. Stopping here
@@ -253,7 +253,7 @@ export class LennyVoiceController {
     if (!this.current(epoch)) return;
     this.ports.audio.clear(); this.session = undefined; this.item = undefined; this.itemModes.clear();
     this.resumeAfterConversation = false;
-    this.update({ episode: undefined, heard: '', caption: 'Your place is saved. Tap Hey Murmur to begin.' });
+    this.update({ episode: undefined, heard: '', caption: 'Microphone off. Your place is saved. Reopen Murmur to listen again.' });
     if (announce) {
       await this.say('Microphone off. Your place is saved.', epoch);
       if (this.current(epoch)) this.update({ phase: 'idle' });
