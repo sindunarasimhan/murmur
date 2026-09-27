@@ -30,7 +30,7 @@ export function InvocationStage({ state }: { state: VoiceState }) {
       <View style={styles.stage}>
         <Text style={styles.eyebrow}>GOOD CONVERSATIONS, CLOSER.</Text>
         <Text style={styles.title}>Where shall we go?</Text>
-        <View style={styles.mascot}><MurmurMascot size={Math.min(width - 24, height * 0.44, 390)} phase={state.phase} reducedMotion={reducedMotion} /></View>
+        <View style={styles.mascot}><MurmurMascot size={Math.min(width - 24, height * 0.44, 390)} phase={state.speechPlaying ? 'speaking' : state.phase === 'speaking' ? 'thinking' : state.phase} reducedMotion={reducedMotion} /></View>
         <View style={styles.labelRow}><View style={[styles.dot, { backgroundColor: state.error ? '#A36648' : '#7B876C' }]} /><Text style={styles.label}>{label}</Text></View>
         <View style={styles.conversation}>
           {state.heard ? <Text style={styles.transcript}>“{state.heard}”</Text> : <Text style={styles.prompt}>{listening ? 'Tell me what you’d like to hear.' : state.microphone ? 'Just say “Hey Murmur.”' : 'Your next conversation starts here.'}</Text>}

@@ -60,6 +60,15 @@ Device follow-up: the first user attempt failed voice input, feedback, and playb
 - Wake detection is foreground streaming transcription, not an offline wake-word engine. Mic audio is sent to OpenAI while waiting for the phrase. Background/locked-phone wake is not implemented.
 - The preview contains the prepared Lenny episode. Replies use existing catalog-driven selection and confirmation, not a general open-ended podcast search assistant. Playback UI remains unchanged.
 
+## Voice redesign and device-failure follow-up
+
+- Expo players participating in the voice flow now retain the shared iOS audio session when paused. The installed native implementation otherwise deactivates it after pause even with a stream capturing.
+- Startup requires a nonempty native microphone buffer before reporting listening; a stalled native capture reports an error. Permission, service connection, and capture stages appear separately.
+- Disposal attempts microphone and speech cleanup even if Expo has already released the player during refresh. Regression added after the device log exposed this failure.
+- Invocation uses OpenAI-only speech, including confirmations and error replies. It never silently falls back to device speech. An unavailable speech service leaves a visible error; it cannot produce an audible error when that same service is unreachable.
+- Mascot speech motion follows the audio player's playing event, not the speech request. Interrupting clears that motion.
+- Latest verification: typecheck/lint and 200 unit tests pass; iOS export passes. `scripts/smoke-invocation.mts` passed two consecutive live turns through transcription, catalog selection, session creation, episode audio retrieval, actual OpenAI speech bytes, and controller playback handoff. Native capture and audible playback are not substituted for acceptance: the user must verify these on the phone.
+
 ## Mascot asset provenance
 
 Source: user-supplied cream clay mascot wearing sage headphones. Generated with the imagegen tool and copied to `assets/images/murmur-mascot-base.png`.

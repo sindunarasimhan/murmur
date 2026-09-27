@@ -1,11 +1,11 @@
 import type { CatalogResolution, ListeningSession, Observation, PreparedEpisode, TurnResult } from '../../../shared/listening';
 
 export type VoicePhase = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'followup' | 'playing' | 'paused' | 'error';
-export type VoiceState = { phase: VoicePhase; microphone: boolean; episode?: PreparedEpisode; caption: string; heard: string; error?: string };
+export type VoiceState = { phase: VoicePhase; microphone: boolean; speechPlaying?: boolean; episode?: PreparedEpisode; caption: string; heard: string; error?: string };
 export type ListeningPorts = {
   uuid(): string;
   audio: { position(): number; load(episode: PreparedEpisode, position: number, signal: AbortSignal): Promise<void>; play(): void; pause(): void; seek(seconds: number): Promise<number>; clear(): void };
-  microphone: { start(): Promise<void>; stop(): Promise<void> };
+  microphone: { start(onStage: (caption: string) => void): Promise<void>; stop(): Promise<void> };
   speech: { say(text: string, signal: AbortSignal, turn?: TurnResult): Promise<void>; stop(): Promise<void> };
   api: {
     resolve(utterance: string, episodeId: string | undefined, history: string[], signal: AbortSignal): Promise<CatalogResolution>;
@@ -48,6 +48,7 @@ export class LennyVoiceController {
   }
   private current(epoch: number) { return !this.disposed && epoch === this.epoch; }
   private next() {
+    this.update({ speechPlaying: false });
     this.abort.abort(); this.abort = new AbortController(); clearTimeout(this.timer); clearTimeout(this.speakingDeadline);
     this.speakingDeadline = undefined;
     this.awaitingFinal = false; return ++this.epoch;
@@ -84,7 +85,9 @@ export class LennyVoiceController {
       if (!this.current(epoch)) return;
       let deadline: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([this.ports.microphone.start(), new Promise<never>((_, reject) => {
+        await Promise.race([this.ports.microphone.start((caption) => {
+          if (this.current(epoch)) this.update({ caption });
+        }), new Promise<never>((_, reject) => {
           deadline = setTimeout(() => reject(new Error('The microphone did not open. Check microphone permission and your connection, then reopen Murmur.')), 25_000);
         })]);
       } finally { clearTimeout(deadline); }
@@ -147,9 +150,12 @@ export class LennyVoiceController {
       else this.update({ phase: this.state.episode ? 'paused' : 'idle', caption: 'Say “Hey Murmur” when you’re ready.' });
     }, this.ports.followupMs ?? 6000);
   }
+  speechActivity(playing: boolean) {
+    this.update({ speechPlaying: playing });
+  }
   private async say(text: string, epoch: number, turn?: TurnResult) {
     if (!this.current(epoch)) return;
-    this.update({ phase: 'speaking', caption: text });
+    this.update({ phase: 'speaking', speechPlaying: false, caption: text });
     await this.ports.speech.say(text, this.abort.signal, turn);
   }
   async submit(text: string, returning = false) {
@@ -269,7 +275,11 @@ export class LennyVoiceController {
     await this.ports.speech.say(message, this.abort.signal).catch(() => undefined);
   }
   async dispose() {
-    this.disposed = true; this.next(); this.ports.audio.pause();
-    await Promise.all([this.ports.microphone.stop(), this.ports.speech.stop()]);
+    this.disposed = true; this.next();
+    await Promise.allSettled([
+      Promise.resolve().then(() => this.ports.audio.pause()),
+      Promise.resolve().then(() => this.ports.microphone.stop()),
+      Promise.resolve().then(() => this.ports.speech.stop()),
+    ]);
   }
 }

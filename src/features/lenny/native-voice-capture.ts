@@ -3,6 +3,7 @@ type CapturePorts = {
   stop(): void;
   recordingMode(): Promise<void>;
   playbackMode(): Promise<void>;
+  inputReady(): Promise<void>;
 };
 
 export class NativeVoiceCapture {
@@ -26,6 +27,8 @@ export class NativeVoiceCapture {
       await this.ports.start();
       if (generation !== this.generation) return;
       await this.ports.recordingMode();
+      if (generation !== this.generation) return;
+      await this.ports.inputReady();
     });
   }
 

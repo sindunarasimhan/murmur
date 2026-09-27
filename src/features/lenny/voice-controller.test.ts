@@ -82,6 +82,32 @@ test('a player cleanup failure cannot hide the original microphone failure', asy
     assert.equal(s.spoken.at(-1), s.controller.state.caption);
   } finally { await s.controller.dispose(); }
 });
+test('disposing after Expo releases the player still stops microphone and speech', async () => {
+  const s = setup();
+  const stopped: string[] = [];
+  s.ports.audio.pause = () => { throw new Error('Native shared object released'); };
+  s.ports.microphone.stop = async () => { stopped.push('microphone'); };
+  s.ports.speech.stop = async () => { stopped.push('speech'); };
+  await s.controller.dispose();
+  assert.deepEqual(stopped.sort(), ['microphone', 'speech']);
+});
+test('speech animation waits for real playback and clears when interrupted', async () => {
+  const s = setup();
+  let finish!: () => void;
+  s.ports.speech.say = () => new Promise<void>((resolve) => { finish = resolve; });
+  try {
+    await s.controller.activate();
+    const pending = s.controller.submit('play Lenny');
+    await delay();
+    assert.equal(s.controller.state.phase, 'speaking');
+    assert.equal(s.controller.state.speechPlaying, false);
+    s.controller.speechActivity(true);
+    assert.equal(s.controller.state.speechPlaying, true);
+    s.controller.partial('Hey Murmur', 'interrupt');
+    assert.equal(s.controller.state.speechPlaying, false);
+    finish(); await pending;
+  } finally { await s.controller.dispose(); }
+});
 test('tap, spoken episode selection, wake interruption, and silence return preserve the exact bookmark', async () => {
   const s = setup();
   try {
