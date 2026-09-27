@@ -7,7 +7,7 @@ import { ContinuousTranscription } from '@/services/voice/continuous-transcripti
 import { startWebPcmCapture, type WebPcmCapture } from '@/services/voice/web-pcm-capture';
 import { PLAYBACK_AUDIO_MODE, RECORDING_AUDIO_MODE } from '@/features/listening/audio-mode';
 import { useAssistantVoice } from '@/features/listening/use-assistant-voice';
-import { LennyVoiceController, type VoiceState } from './voice-controller';
+import { LennyVoiceController, wakeRequest, type VoiceState } from './voice-controller';
 import { ForegroundVoice } from './foreground-voice';
 import { NativeVoiceCapture } from './native-voice-capture';
 import { loadEpisodeAudio } from './load-episode-audio';
@@ -32,8 +32,13 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
   const captureGeneration = useRef(0);
   const inputBuffers = useRef(0);
   const lastInputAt = useRef(0);
+  const lastDiagnosticAt = useRef(0);
   const onBuffer = useCallback((chunk: { data: ArrayBuffer; sampleRate: number; channels: number }) => {
     if (chunk.data.byteLength > 0) { inputBuffers.current++; lastInputAt.current = Date.now(); }
+    if (__DEV__ && Date.now() - lastDiagnosticAt.current > 10_000) {
+      lastDiagnosticAt.current = Date.now();
+      console.info('[murmur-voice] input', { buffers: inputBuffers.current, bytes: chunk.data.byteLength });
+    }
     transcriber.current?.append(chunk.data, chunk.sampleRate, chunk.channels);
   }, []);
   const { stream } = useAudioStream({ encoding: 'int16', sampleRate: 24_000, channels: 1, onBuffer });
@@ -43,6 +48,7 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let alive = true;
+    let diagnosticPhase: VoiceState['phase'] | undefined;
     const nativeCapture = nativeCaptureRef.current ??= new NativeVoiceCapture({
       start: () => { inputBuffers.current = 0; return latest.current.stream.start(); },
       stop: () => { latest.current.stream.stop(); },
@@ -59,7 +65,11 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
     const instance = new LennyVoiceController({
       uuid: Crypto.randomUUID,
       api: listeningApi,
-      changed: (next) => { if (alive) setState(next); },
+      changed: (next) => {
+        if (__DEV__ && diagnosticPhase !== next.phase) console.info('[murmur-voice] state', { phase: next.phase, microphone: next.microphone, error: Boolean(next.error) });
+        diagnosticPhase = next.phase;
+        if (alive) setState(next);
+      },
       audio: {
         position: () => Number.isFinite(player.currentTime) ? player.currentTime : 0,
         load: async (episode, position, signal) => {
@@ -89,7 +99,13 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
           }
           const live = new ContinuousTranscription({
             url: () => voiceGatewayUrl().replace(/\/voice$/, '/live-voice'), ticket: (signal) => listeningApi.liveTicket(signal),
-            callbacks: { partial: (text, id) => instance.partial(text, id), final: (text, id) => instance.final(text, id),
+            callbacks: { partial: (text, id) => {
+              if (__DEV__ && wakeRequest(text) !== undefined) console.info('[murmur-voice] partial-wake', { phase: instance.state.phase });
+              instance.partial(text, id);
+            }, final: (text, id) => {
+              if (__DEV__) console.info('[murmur-voice] transcript-final', { wake: wakeRequest(text) !== undefined, characters: text.length, phase: instance.state.phase });
+              instance.final(text, id);
+            },
               activity: () => instance.activity(), error: (error) => { void instance.fail(error); } },
           });
           transcriber.current = live;
