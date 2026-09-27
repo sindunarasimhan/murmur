@@ -8,6 +8,8 @@ import { startWebPcmCapture, type WebPcmCapture } from '@/services/voice/web-pcm
 import { PLAYBACK_AUDIO_MODE, RECORDING_AUDIO_MODE } from '@/features/listening/audio-mode';
 import { useAssistantVoice } from '@/features/listening/use-assistant-voice';
 import { LennyVoiceController, type VoiceState } from './voice-controller';
+import { ForegroundVoice } from './foreground-voice';
+import { NativeVoiceCapture } from './native-voice-capture';
 import type { PreparedEpisode } from '../../../shared/listening';
 
 const initial: VoiceState = { phase: 'idle', microphone: false, caption: 'A good conversation starts with listening.', heard: '' };
@@ -17,24 +19,41 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState(initial);
   const [count, setCount] = useState(0);
   const [featured, setFeatured] = useState<PreparedEpisode>();
-  const player = useAudioPlayer(null, { updateInterval: 200 });
+  const player = useAudioPlayer(null, { updateInterval: 200, keepAudioSessionActive: true });
   const status = useAudioPlayerStatus(player);
-  const speech = useAssistantVoice({ audioMode: RECORDING_AUDIO_MODE, deviceAnnouncements: true });
+  const speech = useAssistantVoice({ audioMode: RECORDING_AUDIO_MODE, remoteOnly: true, keepAudioSessionActive: true });
   const statusRef = useRef(status);
   useEffect(() => { statusRef.current = status; }, [status]);
   const controller = useRef<LennyVoiceController | undefined>(undefined);
   const transcriber = useRef<ContinuousTranscription | undefined>(undefined);
   const capture = useRef<WebPcmCapture | undefined>(undefined);
   const captureGeneration = useRef(0);
+  const inputBuffers = useRef(0);
+  const lastInputAt = useRef(0);
   const onBuffer = useCallback((chunk: { data: ArrayBuffer; sampleRate: number; channels: number }) => {
+    if (chunk.data.byteLength > 0) { inputBuffers.current++; lastInputAt.current = Date.now(); }
     transcriber.current?.append(chunk.data, chunk.sampleRate, chunk.channels);
   }, []);
   const { stream } = useAudioStream({ encoding: 'int16', sampleRate: 24_000, channels: 1, onBuffer });
   const latest = useRef({ speech, stream });
   useEffect(() => { latest.current = { speech, stream }; }, [speech, stream]);
+  const nativeCaptureRef = useRef<NativeVoiceCapture | undefined>(undefined);
 
   useEffect(() => {
     let alive = true;
+    const nativeCapture = nativeCaptureRef.current ??= new NativeVoiceCapture({
+      start: () => { inputBuffers.current = 0; return latest.current.stream.start(); },
+      stop: () => { latest.current.stream.stop(); },
+      recordingMode: () => setAudioModeAsync(RECORDING_AUDIO_MODE),
+      playbackMode: () => setAudioModeAsync(PLAYBACK_AUDIO_MODE),
+      inputReady: async () => {
+        const deadline = Date.now() + 5000;
+        while (inputBuffers.current === 0) {
+          if (Date.now() >= deadline) throw new Error('The microphone opened but no audio arrived. Close other audio apps, then reopen Murmur.');
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      },
+    });
     const instance = new LennyVoiceController({
       uuid: Crypto.randomUUID,
       api: listeningApi,
@@ -59,15 +78,17 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
         },
         play: () => { player.play(); }, pause: () => { player.pause(); },
         seek: async (seconds) => { await player.seekTo(seconds, 0, 0); return player.currentTime; },
-        clear: () => { player.replace(null); },
+        // Expo iOS replace expects an AudioSource record, even when clearing it.
+        clear: () => { player.replace({}); },
       },
       microphone: {
-        async start() {
+        async start(onStage) {
           const generation = ++captureGeneration.current;
           if (process.env.EXPO_OS !== 'web') {
+            onStage('Checking microphone permission…');
             const permission = await requestRecordingPermissionsAsync();
             if (generation !== captureGeneration.current) return;
-            if (!permission.granted) throw new Error('Allow microphone access in iPhone Settings, then tap Hey Murmur.');
+            if (!permission.granted) throw new Error('Microphone access is off. Enable Microphone for Expo Go in iPhone Settings, then reopen Murmur.');
           } else {
             // Obtain capture before opening a paid upstream connection. A late
             // permission response after cancellation must immediately release it.
@@ -81,14 +102,12 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
               activity: () => instance.activity(), error: (error) => { void instance.fail(error); } },
           });
           transcriber.current = live;
+          onStage('Connecting to the voice service…');
           await live.start();
           if (generation !== captureGeneration.current) { live.stop(); return; }
           if (process.env.EXPO_OS !== 'web') {
-            await latest.current.stream.start();
-            if (generation !== captureGeneration.current) { latest.current.stream.stop(); return; }
-            // Expo's stream starts in record-only mode. Restore play-and-record
-            // afterward so the podcast remains audible while the mic is open.
-            await setAudioModeAsync(RECORDING_AUDIO_MODE);
+            onStage('Checking microphone audio…');
+            await nativeCapture.start();
           }
         },
         async stop() {
@@ -96,8 +115,8 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
           transcriber.current?.stop(); transcriber.current = undefined;
           const web = capture.current; capture.current = undefined;
           await web?.stop().catch(() => undefined);
-          if (process.env.EXPO_OS !== 'web') { try { latest.current.stream.stop(); } catch { /* Already released. */ } }
-          await setAudioModeAsync(PLAYBACK_AUDIO_MODE).catch(() => undefined);
+          if (process.env.EXPO_OS !== 'web') await nativeCapture.stop();
+          else await setAudioModeAsync(PLAYBACK_AUDIO_MODE);
         },
       },
       speech: {
@@ -108,17 +127,26 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
           signal.addEventListener('abort', abort, { once: true });
           void latest.current.speech.speak(text, { signal,
             loadSpeech: turn ? (audioSignal) => listeningApi.speech(turn.session.id, turn.requestId, audioSignal) : undefined,
-            onDone: () => { signal.removeEventListener('abort', abort); resolve(); },
+            onStart: () => { if (!signal.aborted) instance.speechActivity(true); },
+            onDone: () => { instance.speechActivity(false); signal.removeEventListener('abort', abort); resolve(); },
+            onError: (error) => { instance.speechActivity(false); signal.removeEventListener('abort', abort); reject(error); },
           }).catch((error) => { signal.removeEventListener('abort', abort); reject(error); });
         }),
       },
     });
     controller.current = instance;
-    const foreground = AppState.addEventListener('change', (next) => { if (next === 'background') void instance.shutdown(); });
+    const lifecycle = new ForegroundVoice(instance);
+    const foreground = AppState.addEventListener('change', (next) => lifecycle.changed(next));
+    lifecycle.changed(AppState.currentState);
     const progress = setInterval(() => { void instance.progress(); }, 10_000);
+    const inputHealth = setInterval(() => {
+      if (process.env.EXPO_OS !== 'web' && instance.state.microphone && Date.now() - lastInputAt.current > 5000) {
+        void instance.fail(new Error('Microphone audio stopped arriving. Close other audio apps, then reopen Murmur.'));
+      }
+    }, 1000);
     const fetchController = new AbortController();
     void listeningApi.catalog(fetchController.signal).then((episodes) => { if (alive) { setCount(episodes.length); setFeatured(episodes.length === 1 ? episodes[0] : undefined); } }).catch(() => undefined);
-    return () => { alive = false; fetchController.abort(); foreground.remove(); clearInterval(progress); void instance.dispose(); };
+    return () => { alive = false; fetchController.abort(); foreground.remove(); clearInterval(progress); clearInterval(inputHealth); void lifecycle.dispose(); };
   }, [onBuffer, player]);
   useEffect(() => { if (status.didJustFinish) void controller.current?.ended(); }, [status.didJustFinish]);
   useEffect(() => {

@@ -1,5 +1,6 @@
 import {
   setAudioModeAsync,
+  setIsAudioActiveAsync,
   useAudioPlayer,
   useAudioPlayerStatus,
   type AudioMode,
@@ -18,6 +19,8 @@ import {
 type AssistantVoiceOptions = {
   signal?: AbortSignal;
   onDone?: () => void;
+  onStart?: () => void;
+  onError?: (error: Error) => void;
   loadSpeech?: (signal?: AbortSignal) => Promise<SynthesizedSpeech>;
 };
 
@@ -32,6 +35,8 @@ type ActiveCompletion = {
   kind: 'device' | 'remote';
   started: boolean;
   onDone?: () => void;
+  onStart?: () => void;
+  onError?: (error: Error) => void;
 };
 
 function playbackWatchdogMilliseconds(text: string): number {
@@ -58,8 +63,8 @@ function prepareAudio(speech: SynthesizedSpeech): PreparedAudio {
   };
 }
 
-export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnouncements = false }: { audioMode?: AudioMode; deviceAnnouncements?: boolean } = {}) {
-  const player = useAudioPlayer(null, { updateInterval: 120 });
+export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnouncements = false, keepAudioSessionActive = false, remoteOnly = false }: { audioMode?: AudioMode; deviceAnnouncements?: boolean; keepAudioSessionActive?: boolean; remoteOnly?: boolean } = {}) {
+  const player = useAudioPlayer(null, { updateInterval: 120, keepAudioSessionActive });
   const status = useAudioPlayerStatus(player);
   const sessionRef = useRef(0);
   const completionRef = useRef<ActiveCompletion | undefined>(undefined);
@@ -84,7 +89,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
   }, []);
 
   const finish = useCallback(
-    (session: number) => {
+    (session: number, error?: Error) => {
       const completion = completionRef.current;
       if (!completion || completion.session !== session || sessionRef.current !== session) return;
 
@@ -97,7 +102,8 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
         // The player can already be released during navigation cleanup.
       }
       clearPreparedAudio(session);
-      completion.onDone?.();
+      if (error) completion.onError?.(error);
+      else completion.onDone?.();
     },
     [clearPreparedAudio, clearStartTimer, clearWatchdog, player],
   );
@@ -120,6 +126,11 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
     (session: number, text: string) => {
       const completion = completionRef.current;
       if (!completion || completion.session !== session || sessionRef.current !== session) return;
+
+      if (remoteOnly) {
+        finish(session, new Error('Murmur’s voice could not play. The response is still on screen.'));
+        return;
+      }
 
       completion.kind = 'device';
       completion.started = true;
@@ -151,7 +162,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
         finish(session);
       }
     },
-    [clearPreparedAudio, clearStartTimer, clearWatchdog, finish, player],
+    [clearPreparedAudio, clearStartTimer, clearWatchdog, finish, player, remoteOnly],
   );
 
   useEffect(() => {
@@ -159,6 +170,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
     if (!completion || completion.kind !== 'remote') return;
 
     if (status.playing) {
+      if (!completion.started) completion.onStart?.();
       completion.started = true;
       clearStartTimer();
     }
@@ -182,7 +194,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
   const speak = useCallback(
     async (
       text: string,
-      { signal, onDone, loadSpeech }: AssistantVoiceOptions = {},
+      { signal, onDone, onStart, onError, loadSpeech }: AssistantVoiceOptions = {},
     ): Promise<'device' | 'openai'> => {
       await stop();
       if (signal?.aborted) {
@@ -198,7 +210,10 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
       const session = sessionRef.current + 1;
       sessionRef.current = session;
 
-      if ((process.env.EXPO_OS !== 'web' || deviceAnnouncements) && !loadSpeech) {
+      if (!remoteOnly && (process.env.EXPO_OS !== 'web' || deviceAnnouncements) && !loadSpeech) {
+        await setAudioModeAsync(audioMode);
+        await setIsAudioActiveAsync(true);
+        if (sessionRef.current !== session || signal?.aborted) throw new Error('Assistant speech was cancelled.');
         completionRef.current = {
           session,
           text,
@@ -211,7 +226,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
       }
 
       try {
-        const speech = await (loadSpeech ? loadSpeech(signal) : synthesizeSpeech(`Murmur. ${text}`, { signal }));
+        const speech = await (loadSpeech ? loadSpeech(signal) : synthesizeSpeech(text, { signal }));
         if (sessionRef.current !== session || signal?.aborted) {
           throw new MurmurApiError('Assistant speech was cancelled.', {
             kind: 'cancelled',
@@ -224,7 +239,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
 
         const prepared = prepareAudio(speech);
         preparedAudioRef.current = { session, audio: prepared };
-        await setAudioModeAsync(audioMode).catch(() => undefined);
+        await setAudioModeAsync(audioMode);
         if (sessionRef.current !== session || signal?.aborted) {
           prepared.cleanup();
           if (preparedAudioRef.current?.audio === prepared) preparedAudioRef.current = undefined;
@@ -244,10 +259,12 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
           kind: 'remote',
           started: false,
           onDone,
+          onStart,
+          onError,
         };
         clearWatchdog();
         watchdogTimerRef.current = setTimeout(
-          () => finish(session),
+          () => finish(session, remoteOnly ? new Error('Murmur’s voice playback timed out. The response is still on screen.') : undefined),
           playbackWatchdogMilliseconds(text),
         );
         clearStartTimer();
@@ -281,6 +298,11 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
           throw error;
         }
 
+        if (remoteOnly) {
+          clearStartTimer(); clearWatchdog(); clearPreparedAudio(session);
+          completionRef.current = undefined;
+          throw error;
+        }
         completionRef.current = {
           session,
           text,
@@ -302,6 +324,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
       stop,
       audioMode,
       deviceAnnouncements,
+      remoteOnly,
     ],
   );
 

@@ -44,6 +44,70 @@ test('wake phrase requires an explicit Hey Murmur and preserves the following re
   assert.equal(wakeRequest('podcast background. Hey, Murmur! What did she mean?'), 'What did she mean?');
   assert.equal(wakeRequest('Hey mur mur, skip this ad'), 'skip this ad');
 });
+test('idle invocation retains wake monitoring and reactivates without a button', async () => {
+  const s = setup(15);
+  try {
+    await s.controller.activate(); await delay(25);
+    assert.equal(s.controller.state.phase, 'idle'); assert(s.mic);
+    s.controller.partial('An unrelated background conversation', 'ambient');
+    s.controller.final('An unrelated background conversation', 'ambient');
+    assert.equal(s.controller.state.phase, 'idle');
+    s.controller.partial('Hey Murmur, play', 'wake');
+    assert.equal(s.controller.state.phase, 'listening');
+    assert.equal(s.controller.state.heard, 'play');
+    s.controller.final('Hey Murmur, play Lenny', 'wake'); await delay();
+    assert(s.playing); assert.equal(s.controller.state.episode?.id, episode.id);
+  } finally { await s.controller.dispose(); }
+});
+test('voice failure accurately reports microphone off and cannot wake until reopened', async () => {
+  const s = setup();
+  try {
+    await s.controller.activate();
+    await s.controller.fail(new Error('Voice is unavailable. Reopen Murmur to try again.'));
+    assert.equal(s.controller.state.phase, 'error'); assert(!s.mic);
+    s.controller.final('Hey Murmur, play Lenny', 'after-error'); await delay();
+    assert(!s.playing); assert.equal(s.controller.state.phase, 'error');
+    await s.controller.activate(); assert(s.mic);
+  } finally { await s.controller.dispose(); }
+});
+test('a player cleanup failure cannot hide the original microphone failure', async () => {
+  const s = setup();
+  s.ports.audio.clear = () => { throw new Error('Native source rejected'); };
+  s.ports.microphone.start = async () => { throw new Error('Microphone permission denied'); };
+  try {
+    await s.controller.activate();
+    assert.equal(s.controller.state.phase, 'error');
+    assert.match(s.controller.state.caption, /Microphone permission denied/);
+    assert.match(s.controller.state.caption, /cleanup also failed/);
+    assert.equal(s.spoken.at(-1), s.controller.state.caption);
+  } finally { await s.controller.dispose(); }
+});
+test('disposing after Expo releases the player still stops microphone and speech', async () => {
+  const s = setup();
+  const stopped: string[] = [];
+  s.ports.audio.pause = () => { throw new Error('Native shared object released'); };
+  s.ports.microphone.stop = async () => { stopped.push('microphone'); };
+  s.ports.speech.stop = async () => { stopped.push('speech'); };
+  await s.controller.dispose();
+  assert.deepEqual(stopped.sort(), ['microphone', 'speech']);
+});
+test('speech animation waits for real playback and clears when interrupted', async () => {
+  const s = setup();
+  let finish!: () => void;
+  s.ports.speech.say = () => new Promise<void>((resolve) => { finish = resolve; });
+  try {
+    await s.controller.activate();
+    const pending = s.controller.submit('play Lenny');
+    await delay();
+    assert.equal(s.controller.state.phase, 'speaking');
+    assert.equal(s.controller.state.speechPlaying, false);
+    s.controller.speechActivity(true);
+    assert.equal(s.controller.state.speechPlaying, true);
+    s.controller.partial('Hey Murmur', 'interrupt');
+    assert.equal(s.controller.state.speechPlaying, false);
+    finish(); await pending;
+  } finally { await s.controller.dispose(); }
+});
 test('tap, spoken episode selection, wake interruption, and silence return preserve the exact bookmark', async () => {
   const s = setup();
   try {
