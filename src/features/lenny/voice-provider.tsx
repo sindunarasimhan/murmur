@@ -10,6 +10,7 @@ import { useAssistantVoice } from '@/features/listening/use-assistant-voice';
 import { LennyVoiceController, type VoiceState } from './voice-controller';
 import { ForegroundVoice } from './foreground-voice';
 import { NativeVoiceCapture } from './native-voice-capture';
+import { loadEpisodeAudio } from './load-episode-audio';
 import type { CaptionTrack, PreparedEpisode } from '../../../shared/listening';
 
 const initial: VoiceState = { phase: 'idle', microphone: false, caption: 'A good conversation starts with listening.', heard: '' };
@@ -64,18 +65,7 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
         load: async (episode, position, signal) => {
           if (!episode.audioPath) throw new Error('That episode’s audio is unavailable.');
           const uri = episode.audioPath.startsWith('https://') ? episode.audioPath : `${listeningBaseUrl()}${episode.audioPath}`;
-          player.replace({ uri, name: episode.title });
-          const started = Date.now();
-          // Check the native player's source after replace; React status can still
-          // describe the previous episode until the next render.
-          while (!player.isLoaded) {
-            signal.throwIfAborted();
-            if (statusRef.current.error) throw new Error('That episode could not be played. Try another guest.');
-            if (Date.now() - started > 20_000) throw new Error('The episode took too long to load. Your place is saved.');
-            await new Promise((resolve) => setTimeout(resolve, 100));
-          }
-          signal.throwIfAborted();
-          await player.seekTo(position, 0, 0);
+          await loadEpisodeAudio(player, { uri, name: episode.title }, position, signal, () => Boolean(statusRef.current.error));
         },
         play: () => { player.play(); }, pause: () => { player.pause(); },
         seek: async (seconds) => { await player.seekTo(seconds, 0, 0); return player.currentTime; },
