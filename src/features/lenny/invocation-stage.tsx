@@ -23,6 +23,7 @@ export function InvocationStage({ state, playbackEntered = false, seconds = 0, c
   const reducedMotion = useReducedMotion();
   const listening = state.phase === 'listening' || state.phase === 'followup';
   const playback = Boolean(state.episode && playbackEntered);
+  const showConversation = !playback || Boolean(state.error) || (state.phase !== 'playing' && state.phase !== 'paused');
   const transition = useSharedValue(playback ? 1 : 0);
   const mascotSize = Math.min(width - 24, height * 0.44, 390);
   const compactSize = 116;
@@ -35,8 +36,9 @@ export function InvocationStage({ state, playbackEntered = false, seconds = 0, c
   const mascotMotion = useAnimatedStyle(() => ({ transform: [{ translateY: -(mascotSize - compactSize) / 2 * transition.value }, { scale: 1 - (1 - compactSize / mascotSize) * transition.value }] }));
   const playerStyle = useAnimatedStyle(() => ({ opacity: transition.value, transform: [{ translateY: 18 * (1 - transition.value) }] }));
   const transcript = captionAt(captions, seconds, Math.floor(Math.min(width - 52, 430) / (12 * fontScale)) * 2);
-  const captionStatus = captionsError ? 'Transcript unavailable. Audio can still play.' : !state.episode?.transcriptReady ? 'No transcript available for this episode.' : !captions.length ? 'Loading the episode transcript…' : '';
-  const label = state.error ? 'LET’S RECONNECT' : listening ? 'I’M LISTENING' : state.phase === 'thinking' ? 'FINDING YOUR CONVERSATION' : state.phase === 'speaking' ? 'A LITTLE SOMETHING FOR YOU' : state.phase === 'connecting' ? 'GETTING READY' : state.microphone ? 'HERE WHEN YOU NEED ME' : 'A QUIET MOMENT';
+  const captionStatus = captionsError || !state.episode?.transcriptReady ? 'Captions unavailable' : !captions.length ? 'Loading captions…' : '';
+  const label = state.error ? 'Connection interrupted' : listening ? 'Listening' : state.phase === 'thinking' ? 'Thinking' : state.phase === 'speaking' ? state.speechPlaying ? 'Speaking' : 'Thinking' : state.phase === 'connecting' ? 'Connecting' : state.microphone ? 'Ready' : 'Mic off';
+  const showReply = Boolean(state.error) || state.phase === 'speaking';
   return <View style={styles.root}>
     <StatusBar style="dark" />
     <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[StyleSheet.absoluteFill, { opacity: 0.12 }]}>
@@ -51,34 +53,31 @@ export function InvocationStage({ state, playbackEntered = false, seconds = 0, c
       <View style={styles.stage}>
         <Animated.View style={[{ width: '100%' }, introStyle]} accessibilityElementsHidden={playback} importantForAccessibility={playback ? 'no-hide-descendants' : 'auto'}>
           <View onLayout={({ nativeEvent }) => setIntroHeight(nativeEvent.layout.height)}>
-          <Text style={styles.eyebrow}>GOOD CONVERSATIONS, CLOSER.</Text>
-          <Text style={styles.title}>Where shall we go?</Text>
+          <Text style={styles.title}>What would you like to hear?</Text>
           </View>
         </Animated.View>
         <Animated.View style={[styles.mascot, { width: mascotSize }, mascotSpace]}><Animated.View style={mascotMotion}><MurmurMascot size={mascotSize} phase={state.speechPlaying ? 'speaking' : state.phase === 'speaking' ? 'thinking' : state.phase} level={state.speechLevel} reducedMotion={reducedMotion} /></Animated.View></Animated.View>
-        <View style={styles.labelRow}><View style={[styles.dot, { backgroundColor: state.error ? '#A36648' : '#7B876C' }]} /><Text style={styles.label}>{playback && state.phase === 'playing' ? state.microphone ? 'PLAYING · HERE IF YOU NEED ME' : 'PLAYING · MICROPHONE OFF' : playback && state.phase === 'paused' ? 'YOUR PLACE IS SAVED' : label}</Text></View>
+        <View style={styles.labelRow}><View style={[styles.dot, { backgroundColor: state.error ? '#A36648' : '#7B876C' }]} /><Text style={styles.label}>{playback && state.phase === 'playing' ? 'Playing' : playback && state.phase === 'paused' ? 'Paused' : label}</Text></View>
         {playback && state.episode ? <Animated.View style={[styles.player, playerStyle]}>
           <View style={styles.artworkFrame}>
             {state.episode.artworkUrl ? <Image source={{ uri: state.episode.artworkUrl }} style={styles.artwork} contentFit="cover" accessibilityLabel={`${state.episode.showTitle} artwork`} /> : <View style={[styles.artwork, styles.artworkFallback]}><Text style={styles.brand}>{state.episode.showTitle}</Text></View>}
           </View>
-          <Text selectable style={styles.episodeGuest}>{state.episode.guest}</Text>
-          <Text selectable numberOfLines={2} style={styles.episodeTitle}>{state.episode.title}</Text>
+          <Text selectable accessibilityLabel={`${state.episode.guest}. ${state.episode.title}`} style={styles.episodeGuest}>{state.episode.guest}</Text>
           <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${Math.max(0, Math.min(100, seconds / Math.max(1, state.episode.durationSeconds) * 100))}%` }]} /></View>
           <Text style={styles.time}>{formatDuration(seconds)} / {formatDuration(state.episode.durationSeconds)}</Text>
-          <View style={styles.episodeTranscript}>
+          {state.phase === 'playing' || state.phase === 'paused' ? <View style={styles.episodeTranscript}>
             <Text selectable numberOfLines={2} style={styles.currentLine}>{transcript || captionStatus || ' '}</Text>
-          </View>
-          {captions.length > 0 ? <Text style={styles.timingNote}>Transcript timing is approximate within each segment.</Text> : null}
+          </View> : null}
         </Animated.View> : null}
-        <View style={[styles.conversation, playback && styles.playbackConversation]}>
-          {state.heard && (!playback || state.phase !== 'playing') ? <Text selectable style={[styles.transcript, playback && styles.playbackHeard]}>“{state.heard}”</Text> : !playback ? <Text style={styles.prompt}>{listening ? 'Tell me what you’d like to hear.' : state.microphone ? 'Just say “Hey Murmur.”' : 'Your next conversation starts here.'}</Text> : null}
-          {(!playback || state.phase !== 'playing') ? <Text selectable accessibilityLiveRegion="polite" accessibilityRole={state.error ? 'alert' : 'text'} style={[styles.caption, state.error && styles.error]}>{state.caption}</Text> : null}
-        </View>
+        {showConversation ? <View style={[styles.conversation, playback && styles.playbackConversation]}>
+          {state.heard ? <Text selectable numberOfLines={2} style={[styles.transcript, playback && styles.playbackHeard]}>“{state.heard}”</Text> : null}
+          {showReply ? <Text selectable accessibilityLiveRegion="polite" accessibilityRole={state.error ? 'alert' : 'text'} style={[styles.caption, state.error && styles.error]}>{state.caption}</Text> : null}
+        </View> : null}
       </View>
-      <View style={styles.footer}>
-        <Text style={styles.hint}>{state.microphone ? playback ? '“Hey Murmur, skip this ad” · “Stop listening”' : '“Play Lenny’s podcast” · “Stop listening”' : state.error ? 'Check microphone access and connection, then reopen.' : state.phase === 'connecting' ? 'Allow microphone access to talk with Murmur.' : 'Listening resumes when you reopen the app.'}</Text>
-        <Text style={styles.disclosure}>While the mic is on, audio is sent to OpenAI, including while waiting for “Hey Murmur.” Replies use an AI voice. Lenny’s collection is available in this preview.</Text>
-      </View>
+      {!playback ? <View style={styles.footer}>
+        {state.phase === 'idle' ? <Text style={styles.hint}>{state.microphone ? 'Say “Hey Murmur” to begin.' : 'Reopen the app to listen.'}</Text> : null}
+        <Text style={styles.disclosure}>Mic audio is sent to OpenAI, including while waiting for “Hey Murmur.” Replies use an AI voice.</Text>
+      </View> : null}
     </ScrollView>
   </View>;
 }
@@ -91,7 +90,6 @@ const styles = StyleSheet.create({
   mic: { flexDirection: 'row', alignItems: 'center', gap: 6 }, dot: { width: 5, height: 5, borderRadius: 4 },
   micText: { color: '#807562', fontSize: 11, fontFamily: 'Manrope_500Medium' },
   stage: { flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 24, paddingBottom: 24 },
-  eyebrow: { color: '#968773', fontSize: 9, letterSpacing: 2.4, fontFamily: 'Manrope_600SemiBold', textAlign: 'center' },
   title: { color: '#514A3D', fontFamily: 'Newsreader_400Regular', fontSize: 37, lineHeight: 44, textAlign: 'center', marginTop: 12 },
   mascot: { marginTop: 2, marginBottom: 4 },
   player: { alignItems: 'center', width: '100%', maxWidth: 430, gap: 9, paddingTop: 20 },
@@ -99,20 +97,17 @@ const styles = StyleSheet.create({
   artwork: { width: 174, height: 174, borderRadius: 19 },
   artworkFallback: { alignItems: 'center', justifyContent: 'center', padding: 18 },
   episodeGuest: { color: '#514A3D', fontFamily: 'Newsreader_400Regular', fontSize: 28, lineHeight: 32, textAlign: 'center' },
-  episodeTitle: { color: '#817561', fontFamily: 'Manrope_400Regular', fontSize: 12, lineHeight: 18, textAlign: 'center' },
   progressTrack: { width: '82%', height: 3, backgroundColor: '#DED4C4', borderRadius: 3, overflow: 'hidden', marginTop: 6 },
   progressFill: { height: '100%', backgroundColor: '#818C71' },
   time: { color: '#928571', fontFamily: 'Manrope_400Regular', fontSize: 10, fontVariant: ['tabular-nums'] },
   episodeTranscript: { minHeight: 68, width: '100%', alignItems: 'center', justifyContent: 'center', paddingTop: 10 },
   currentLine: { color: '#585344', fontFamily: 'Newsreader_400Regular', fontSize: 22, lineHeight: 29, textAlign: 'center' },
-  timingNote: { color: '#928571', fontFamily: 'Manrope_400Regular', fontSize: 9, textAlign: 'center' },
   playbackConversation: { minHeight: 0, marginTop: 8 },
   playbackHeard: { fontSize: 19, lineHeight: 25 },
   labelRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   label: { color: '#7F826B', fontFamily: 'Manrope_600SemiBold', fontSize: 9, letterSpacing: 1.8 },
   conversation: { minHeight: 98, alignItems: 'center', justifyContent: 'center', gap: 9, marginTop: 14, maxWidth: 430 },
   transcript: { color: '#504C3F', fontFamily: 'Newsreader_400Regular', fontSize: 26, lineHeight: 32, textAlign: 'center' },
-  prompt: { color: '#655E50', fontFamily: 'Newsreader_400Regular', fontSize: 23, lineHeight: 29, textAlign: 'center' },
   caption: { color: '#877B68', fontFamily: 'Manrope_400Regular', fontSize: 12, lineHeight: 20, textAlign: 'center' },
   error: { color: '#995D40' },
   footer: { gap: 10, maxWidth: 410, alignSelf: 'center' },

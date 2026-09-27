@@ -137,6 +137,15 @@ test('PostgreSQL, preparation jobs, and authenticated listening work together', 
       assert.equal((await app.inject({ method: 'POST', url: speechUrl, headers: headers(user.token), payload: {} })).statusCode, 200);
       assert.equal((await app.inject({ method: 'POST', url: speechUrl, headers: headers(user.token), payload: {} })).statusCode, 200);
       assert.equal(speechCalls, 1);
+      for (const utterance of ['Give me an example', 'Why would that work?', 'Do not resume yet, explain the tradeoff']) {
+        session = await repository.observe(user.id, session.id, { ...session, reason: 'speech-ended' });
+        const followup = await app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/turns`, headers: headers(user.token), payload: turnInput(session, utterance) });
+        assert.equal(followup.statusCode, 200, followup.body);
+        assert.equal(followup.json().action, null);
+        assert.equal(followup.json().session.bookmarkSeconds, 18.375);
+        session = followup.json().session;
+      }
+      assert.equal((await repository.history(session.id)).length, 4);
       const returnInput = turnInput(session, 'back to the podcast');
       const returned = await app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/turns`, headers: headers(user.token), payload: returnInput });
       assert.equal(returned.statusCode, 200, returned.body);
@@ -147,6 +156,7 @@ test('PostgreSQL, preparation jobs, and authenticated listening work together', 
       assert.equal(acknowledged.statusCode, 200);
       assert.equal(acknowledged.json().bookmarkSeconds, null);
       assert.equal(acknowledged.json().phase, 'playing');
+      assert.deepEqual(await repository.history(session.id), [], 'return ends the exploration context');
       assert.equal((await app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/acknowledgements`, headers: headers(user.token), payload: ack })).statusCode, 409);
       assert.equal((await app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/turns`, headers: headers(user.token), payload: returnInput })).statusCode, 409);
     });
@@ -255,6 +265,22 @@ test('PostgreSQL, preparation jobs, and authenticated listening work together', 
       assert.match(question.json().answer, /shared objective/);
       assert.equal(question.json().session.episodeId, 'lenny-test');
       session = question.json().session;
+      const contextUser = await guest();
+      const contextOpened = await app.inject({ method: 'POST', url: '/v2/sessions', headers: headers(contextUser.token), payload: { episodeId: 'lenny-test' } });
+      const contextSession: ListeningSession = contextOpened.json();
+      const contextInput = turnInput(contextSession, 'Explain shared objectives');
+      const reserved = await repository.reserveTurn(contextUser.id, contextSession.id, contextInput);
+      const teams = (await repository.evidence(reserved.session, contextInput.utterance)).find((passage) => passage.id === 'teams')!;
+      const grounded = await repository.completeTurn(contextUser.id, reserved.session, contextInput.requestId, { answer: 'Teams need shared objectives.', action: null, decision: 'jev', evidence: [teams], followUp: true });
+      const distantContext = grounded.session;
+      const followupEvidence = await repository.evidence(distantContext, 'Give me an example');
+      assert(followupEvidence.some((passage) => passage.id === 'teams'), 'prior grounded topic must survive a vague follow-up far from the bookmark');
+      assert(followupEvidence.some((passage) => passage.id === 'intro0'), 'the current bookmark must remain among fresh candidates');
+      assert(followupEvidence.length <= 11);
+      const isolatedEvidence = await repository.evidence({ ...distantContext, id: randomUUID() }, 'Give me an example');
+      assert(!isolatedEvidence.some((passage) => passage.id === 'teams'), 'another session must not inherit conversation evidence');
+      assert.deepEqual(await repository.evidence({ ...distantContext, audioVersion: 'f'.repeat(64) }, 'Give me an example'), [], 'a different recording must not reuse the evidence');
+      assert(!(await repository.evidence({ ...distantContext, bookmarkSeconds: 1 }, 'Give me an example')).some((passage) => passage.id === 'teams'), 'a later interruption must not inherit the old topic');
       const noAd = await app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/turns`, headers: headers(user.token), payload: turnInput(session, 'skip ad') });
       assert.equal(noAd.json().action, null);
       assert.match(noAd.json().answer, /isn’t an ad/); assert.equal(noAd.json().followUp, false);

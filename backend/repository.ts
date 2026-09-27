@@ -177,11 +177,22 @@ export class Repository {
       CASE WHEN start_seconds <= $3 AND end_seconds >= $3 THEN 0 ELSE 1 END,
       ts_rank(search,websearch_to_tsquery('english',$4)) DESC, abs(start_seconds-$3) LIMIT 8`,
     [session.episodeId, session.audioVersion, session.bookmarkSeconds ?? session.positionSeconds, search]);
-    return result.rows;
+    const previous = await this.pool.query(`SELECT p.id,p.start_seconds AS "startSeconds",p.end_seconds AS "endSeconds",p.text
+      FROM (
+        SELECT t.result FROM conversation_turns t WHERE t.session_id=$1 AND t.status='complete'
+        AND t.result#>>'{session,audioVersion}'=$3 AND jsonb_array_length(t.result->'evidence') > 0
+        AND (t.result#>>'{session,bookmarkSeconds}')::double precision = $4
+        AND t.result->>'answer' <> '' ORDER BY t.created_at DESC LIMIT 1
+      ) prior CROSS JOIN LATERAL jsonb_array_elements(prior.result->'evidence') WITH ORDINALITY AS e(value,ord)
+      JOIN transcript_segments p ON p.episode_id=$2 AND p.audio_version=$3 AND p.id=e.value->>'id'
+      ORDER BY e.ord LIMIT 3`, [session.id, session.episodeId, session.audioVersion, session.bookmarkSeconds]);
+    const candidates: Evidence[] = result.rows;
+    return [...candidates, ...previous.rows.filter((item: Evidence) => !candidates.some((candidate) => candidate.id === item.id))];
   }
   async history(sessionId: string): Promise<{ question: string; answer: string }[]> {
     const result = await this.pool.query(`SELECT t.question,t.result->>'answer' AS answer FROM conversation_turns t
       JOIN listening_sessions s ON s.id=t.session_id AND t.result#>>'{session,audioVersion}'=s.audio_version
+      AND (t.result#>>'{session,bookmarkSeconds}')::double precision = s.bookmark_seconds
       WHERE t.session_id=$1 AND t.status='complete' AND t.result->>'answer' <> '' ORDER BY t.created_at DESC LIMIT 5`, [sessionId]);
     return result.rows.reverse();
   }

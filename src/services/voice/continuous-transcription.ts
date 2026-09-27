@@ -78,13 +78,14 @@ export class ContinuousTranscription {
     if (!this.ready || this.socket?.readyState !== 1 || this.closed) return;
     const pcm = normalizePcm16(data, sampleRate, channels, 24_000);
     if (!pcm.length) return;
+    const now = Date.now();
+    if (this.bytes === 0) this.startedAt = now;
     this.socket.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: bytesToBase64(pcm) }));
     this.bytes += pcm.length;
     const samples = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / 2);
     let energy = 0;
     for (let i = 0; i < samples.length; i += 8) energy += ((samples[i] ?? 0) / 32768) ** 2;
     const loud = Math.sqrt(energy / Math.ceil(samples.length / 8)) > 0.008;
-    const now = Date.now();
     if (loud) { this.voiced = true; this.silenceAt = 0; this.options.callbacks.activity(); }
     else if (this.voiced) this.silenceAt ||= now;
     // Bound monitoring text without waiting for the podcast itself to go silent.

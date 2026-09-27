@@ -40,3 +40,25 @@ test('cancelling a pending microphone handshake rejects promptly without late ca
   const pending = f.client.start(); await Promise.resolve(); f.client.stop();
   await assert.rejects(pending, /cancelled/); assert(f.stopped); assert.deepEqual(f.errors, []);
 });
+test('an idle capture gap cannot commit the first fragment of the next utterance', async (t) => {
+  let now = 1000;
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture();
+  const pending = f.client.start(); await Promise.resolve(); f.emit({ type: 'ready' }); await pending;
+  const voiced = new Int16Array(2400).fill(1000).buffer;
+  const commits = () => f.sent.map((value) => JSON.parse(value)).filter((event) => event.type === 'input_audio_buffer.commit').length;
+  try {
+    now += 20_000;
+    f.client.append(voiced, 24_000, 1);
+    assert.equal(commits(), 0, 'first 100 ms is not a complete request');
+    now += 100;
+    f.client.append(voiced, 24_000, 1);
+    assert.equal(commits(), 0);
+    now += 8000;
+    f.client.append(voiced, 24_000, 1);
+    assert.equal(commits(), 1, 'an active buffer still has a bounded duration');
+    now += 20_000;
+    f.client.append(voiced, 24_000, 1);
+    assert.equal(commits(), 1, 'a later turn starts its own timing window');
+  } finally { f.client.stop(); }
+});

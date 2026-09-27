@@ -23,3 +23,20 @@ test('exact playback commands remain available without an AI decision', async ()
   const decision = await createIntelligence(backendConfig(), choices).decide({ utterance: 'go to thirty-seven minutes', session, evidence: [], history: [] }, new AbortController().signal);
   assert.equal(decision.position, 2220); assert.equal(decision.source, 'code');
 });
+test('continue inside a conversation reaches semantic interpretation instead of unconditional playback', async () => {
+  const config = backendConfig(); config.providers.typesafe.apiKey = 'test-only';
+  let calls = 0;
+  const choices: typeof askChoices = async <K extends string>(_state: unknown, questions: Record<K, ChoiceQuestion>) => {
+    calls++;
+    return Object.fromEntries(Object.entries<ChoiceQuestion>(questions).map(([key, question]) => {
+      const selected = key === 'action' ? 'unclear' : key === 'passage' ? 'none' : 'unspecified';
+      return [key, { choice: selected, confidence: 1, probabilities: Object.fromEntries(Object.keys(question.criteria).map((option) => [option, option === selected ? 1 : 0])) } satisfies ChoiceAnswer];
+    })) as Record<K, ChoiceAnswer>;
+  };
+  const intelligence = createIntelligence(config, choices);
+  const history = [{ question: 'Explain the idea', answer: 'There are two important tradeoffs.' }];
+  assert.equal((await intelligence.decide({ utterance: 'Continue.', session, evidence: [], history }, new AbortController().signal)).kind, 'unclear');
+  assert.equal(calls, 1);
+  assert.equal((await intelligence.decide({ utterance: 'Continue the podcast', session, evidence: [], history }, new AbortController().signal)).kind, 'play');
+  assert.equal(calls, 1);
+});

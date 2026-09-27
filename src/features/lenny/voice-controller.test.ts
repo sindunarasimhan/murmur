@@ -190,7 +190,7 @@ test('speech animation waits for real playback and clears when interrupted', asy
     finish(); await pending;
   } finally { await s.controller.dispose(); }
 });
-test('tap, spoken episode selection, wake interruption, and silence return preserve the exact bookmark', async () => {
+test('wake interruption waits through silence and explicit return preserves the exact bookmark', async () => {
   const s = setup();
   try {
     await s.controller.activate(); assert(s.mic);
@@ -201,10 +201,12 @@ test('tap, spoken episode selection, wake interruption, and silence return prese
     s.controller.final('Hey Murmur, explain that', 'ask'); await delay();
     assert.equal(s.controller.state.phase, 'followup');
     await delay(50);
+    assert(!s.playing); assert.equal(s.controller.state.phase, 'followup');
+    s.controller.final('back to the podcast', 'return'); await delay();
     assert(s.playing); assert.equal(s.position, 123.375); assert(s.spoken.includes('Back to Lenny.'));
   } finally { await s.controller.dispose(); }
 });
-test('a follow-up needs no new wake phrase and postpones automatic playback', async () => {
+test('multiple contextual follow-ups need no new wake phrase and never resume automatically', async () => {
   const s = setup();
   try {
     await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(40);
@@ -212,7 +214,18 @@ test('a follow-up needs no new wake phrase and postpones automatic playback', as
     s.controller.activity(); await delay(40); assert(!s.playing);
     s.controller.partial('Give me an example', 'two'); s.controller.final('Give me an example', 'two'); await delay();
     assert(s.questions.includes('Give me an example'));
-    await delay(50); assert(s.playing); assert.equal(s.position, 40);
+    await delay(50); assert(!s.playing); assert.equal(s.position, 40);
+    const resolve = s.ports.api.resolve;
+    s.ports.api.resolve = async (text, id, history, signal) => {
+      assert.deepEqual(history.slice(-2), ['Give me an example', 'A short grounded answer.']);
+      return resolve(text, id, history, signal);
+    };
+    s.controller.final('Do not resume yet, explain why', 'three'); await delay();
+    assert(s.questions.includes('Do not resume yet, explain why')); assert(!s.playing);
+    s.ports.api.resolve = resolve;
+    await delay(50);
+    s.controller.final('back to the podcast', 'return'); await delay();
+    assert(s.playing); assert.equal(s.position, 40);
   } finally { await s.controller.dispose(); }
 });
 test('podcast speech and delayed duplicate transcripts never become commands', async () => {
@@ -226,6 +239,26 @@ test('podcast speech and delayed duplicate transcripts never become commands', a
     s.controller.final('Let us talk about product management', 'background');
     s.controller.final('Hey Murmur explain that', 'question'); await delay();
     assert.equal(s.questions.length, count);
+  } finally { await s.controller.dispose(); }
+});
+test('starting another episode clears conversation routing context and restores wake gating', async () => {
+  const s = setup(10);
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny');
+    s.seek(89.125); await s.controller.submit('Explain the idea');
+    await delay(80); assert(!s.playing); assert.equal(s.controller.state.phase, 'followup');
+    const other = { ...episode, id: 'lenny-two' };
+    s.ports.api.resolve = async (text, current, history) => {
+      if (text === 'Play a different episode') return { kind: 'play', episode: other, message: 'Starting another episode.' };
+      assert.equal(current, other.id); assert.deepEqual(history, []);
+      return { kind: 'current', message: '' };
+    };
+    await s.controller.submit('Play a different episode');
+    const count = s.questions.length;
+    s.controller.final('Give me an example', 'background-after-switch'); await delay();
+    assert.equal(s.questions.length, count); assert(s.playing);
+    s.controller.final('Hey Murmur explain this new episode', 'new-question'); await delay();
+    assert.equal(s.questions.at(-1), 'explain this new episode'); assert(!s.playing);
   } finally { await s.controller.dispose(); }
 });
 test('explicit pause never resumes after silence and stop listening shuts down capture', async () => {
@@ -259,7 +292,7 @@ test('a question during an explicit pause leaves playback paused after silence',
     await s.controller.submit('pause');
     s.controller.partial('Hey Murmur explain that', 'paused-question');
     s.controller.final('Hey Murmur explain that', 'paused-question'); await delay(55);
-    assert(!s.playing); assert.equal(s.controller.state.phase, 'paused');
+    assert(!s.playing); assert.equal(s.controller.state.phase, 'followup');
   } finally { await s.controller.dispose(); }
 });
 test('a late cancelled microphone start cannot switch off a newer activation', async () => {
