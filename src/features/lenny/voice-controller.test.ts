@@ -44,6 +44,27 @@ test('wake phrase requires an explicit Hey Murmur and preserves the following re
   assert.equal(wakeRequest('podcast background. Hey, Murmur! What did she mean?'), 'What did she mean?');
   assert.equal(wakeRequest('Hey mur mur, skip this ad'), 'skip this ad');
 });
+test('a corrected final wake transcript interrupts playback even when its partial was ignored', async () => {
+  const s = setup();
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(123.375);
+    s.controller.partial('Hey', 'corrected-wake');
+    assert(s.playing);
+    s.controller.final('Hey Murmur, explain that', 'corrected-wake');
+    assert(!s.playing);
+    await delay();
+    assert.deepEqual(s.questions, ['explain that']);
+    s.controller.final('Hey Murmur, explain that', 'corrected-wake');
+    await delay();
+    assert.deepEqual(s.questions, ['explain that']);
+    await s.controller.submit('back to the podcast');
+    assert(s.playing); assert.equal(s.position, 123.375);
+    s.controller.partial('The next thing', 'podcast');
+    s.controller.final('The next thing is to explain that decision', 'podcast');
+    await delay();
+    assert(s.playing); assert.equal(s.questions.length, 2);
+  } finally { await s.controller.dispose(); }
+});
 for (const resume of [true, false]) {
   test(`intro skip acknowledges the actual seek and preserves ${resume ? 'playing' : 'paused'} state`, async () => {
     const s = setup();
