@@ -102,11 +102,6 @@ export class LennyVoiceController {
   }
   partial(text: string, item: string) {
     if (!this.state.microphone || this.disposed) return;
-    if (this.pendingClarification && ['idle', 'paused'].includes(this.state.phase)
-      && /^(?:yes(?:,? please)?|(?:please )?play (?:it|that)(?: please)?)[.!?]*$/i.test(text.trim())) {
-      this.update({ phase: 'listening', caption: 'I’m listening.' });
-      this.itemModes.set(item, true);
-    }
     const wake = wakeRequest(text);
     if (wake !== undefined && this.wakeItem !== item) {
       this.wakeItem = item; this.item = item; this.itemModes.set(item, true);
@@ -152,6 +147,10 @@ export class LennyVoiceController {
     this.timer = setTimeout(() => {
       if (!this.current(epoch) || !['listening', 'followup'].includes(this.state.phase)) return;
       if (this.awaitingFinal) return;
+      if (this.pendingClarification) {
+        this.update({ phase: 'followup', caption: 'I’m listening. What would you like?' });
+        return;
+      }
       if (this.resumeAfterConversation && this.state.episode && this.ports.audio.position() < this.state.episode.durationSeconds - 1) void this.submit('back to the podcast', true);
       else this.update({ phase: this.state.episode ? 'paused' : 'idle', caption: 'Say “Hey Murmur” when you’re ready.' });
     }, this.ports.followupMs ?? 6000);

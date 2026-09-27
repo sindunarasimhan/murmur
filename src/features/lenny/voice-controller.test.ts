@@ -44,12 +44,13 @@ test('wake phrase requires an explicit Hey Murmur and preserves the following re
   assert.equal(wakeRequest('podcast background. Hey, Murmur! What did she mean?'), 'What did she mean?');
   assert.equal(wakeRequest('Hey mur mur, skip this ad'), 'skip this ad');
 });
-test('play it still answers an outstanding offer after the follow-up window closes', async () => {
+for (const reply of ['play it', 'Sounds good, let’s hear that', 'Go ahead with the one you mentioned', 'Put that on for me']) {
+test(`a delayed contextual reply reaches interpretation without a phrase gate: ${reply}`, async () => {
   const s = setup(15);
   const requests: string[] = [];
   s.ports.api.resolve = async (text, _current, history) => {
     requests.push(text);
-    if (text === 'play it') {
+    if (text === reply) {
       assert.deepEqual(history, ['What is available?', 'Would you like to play it?']);
       return { kind: 'play', episode, message: 'Starting the episode.' };
     }
@@ -59,19 +60,18 @@ test('play it still answers an outstanding offer after the follow-up window clos
     await s.controller.activate();
     await s.controller.submit('What is available?');
     await delay(25);
-    assert.equal(s.controller.state.phase, 'idle');
-    s.controller.partial('background conversation', 'background');
-    s.controller.final('background conversation', 'background');
+    assert.equal(s.controller.state.phase, 'followup');
     assert.equal(requests.length, 1);
-    s.controller.partial('play', 'reply');
-    s.controller.partial('play it', 'reply');
-    s.controller.final('play it', 'reply');
+    s.controller.partial(reply.slice(0, 4), 'reply');
+    s.controller.partial(reply, 'reply');
+    s.controller.final(reply, 'reply');
     await delay();
     assert(s.playing);
     assert.equal(s.controller.state.phase, 'playing');
-    assert.deepEqual(requests, ['What is available?', 'play it']);
+    assert.deepEqual(requests, ['What is available?', reply]);
   } finally { await s.controller.dispose(); }
 });
+}
 test('play it without an outstanding offer still requires a wake phrase when idle', async () => {
   const s = setup(15);
   let requests = 0;
@@ -85,6 +85,26 @@ test('play it without an outstanding offer still requires a wake phrase when idl
     assert.equal(s.playing, false);
   } finally { await s.controller.dispose(); }
 });
+for (const reply of ['Not yet', 'No, I meant a different show', 'Maybe later', 'We are discussing dinner']) {
+  test(`a non-accepting delayed reply is interpreted without starting audio: ${reply}`, async () => {
+    const s = setup(15);
+    const requests: string[] = [];
+    s.ports.api.resolve = async (text) => {
+      requests.push(text);
+      return { kind: 'clarify', message: 'Which episode would you like?' };
+    };
+    try {
+      await s.controller.activate();
+      await s.controller.submit('What is available?');
+      await delay(25);
+      s.controller.final(reply, 'reply');
+      await delay();
+      assert.deepEqual(requests, ['What is available?', reply]);
+      assert.equal(s.playing, false);
+      assert.equal(s.controller.state.phase, 'followup');
+    } finally { await s.controller.dispose(); }
+  });
+}
 test('idle invocation retains wake monitoring and reactivates without a button', async () => {
   const s = setup(15);
   try {
