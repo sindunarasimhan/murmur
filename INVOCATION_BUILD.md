@@ -52,6 +52,8 @@ Original pstack instructions were read from cursor/plugins. Cursor-specific Task
 
 ## Remaining acceptance gates
 
+Device follow-up: the first user attempt failed voice input, feedback, and playback. Metro captured an iOS exception from `player.replace(null)` during shutdown. Expo's native `replace` takes a non-null AudioSource record; an empty record clears the underlying item. Replaced the invalid argument and added a regression ensuring cleanup failure cannot mask the original startup error. Phone retry is required; this does not establish that the underlying microphone failure is resolved.
+
 - Physical iPhone: initial permission, automatic listening, live transcript, audible response, foreground idle wake, speaker echo, and background/foreground recovery.
 - User approval of the mascot and clay treatment. The image is the supplied character adapted into a faceless base with native facial overlays; it is not a fully rigged 3D asset.
 - Expo Go and backend must remain reachable from the phone on the same network. This is a running local preview, not cloud deployment.

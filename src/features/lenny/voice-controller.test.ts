@@ -70,6 +70,18 @@ test('voice failure accurately reports microphone off and cannot wake until reop
     await s.controller.activate(); assert(s.mic);
   } finally { await s.controller.dispose(); }
 });
+test('a player cleanup failure cannot hide the original microphone failure', async () => {
+  const s = setup();
+  s.ports.audio.clear = () => { throw new Error('Native source rejected'); };
+  s.ports.microphone.start = async () => { throw new Error('Microphone permission denied'); };
+  try {
+    await s.controller.activate();
+    assert.equal(s.controller.state.phase, 'error');
+    assert.match(s.controller.state.caption, /Microphone permission denied/);
+    assert.match(s.controller.state.caption, /cleanup also failed/);
+    assert.equal(s.spoken.at(-1), s.controller.state.caption);
+  } finally { await s.controller.dispose(); }
+});
 test('tap, spoken episode selection, wake interruption, and silence return preserve the exact bookmark', async () => {
   const s = setup();
   try {

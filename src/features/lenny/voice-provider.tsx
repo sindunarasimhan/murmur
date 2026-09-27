@@ -68,7 +68,8 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
         },
         play: () => { player.play(); }, pause: () => { player.pause(); },
         seek: async (seconds) => { await player.seekTo(seconds, 0, 0); return player.currentTime; },
-        clear: () => { player.replace(null); },
+        // Expo iOS replace expects an AudioSource record, even when clearing it.
+        clear: () => { player.replace({}); },
       },
       microphone: {
         async start() {

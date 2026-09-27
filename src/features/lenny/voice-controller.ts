@@ -261,8 +261,9 @@ export class LennyVoiceController {
   }
   async fail(error: unknown, epoch = this.epoch) {
     if (!this.current(epoch)) return;
-    const message = error instanceof Error ? error.message : 'Murmur could not finish that request. Your place is saved.';
-    await this.shutdown();
+    let message = error instanceof Error ? error.message : 'Murmur could not finish that request. Your place is saved.';
+    try { await this.shutdown(); }
+    catch { message += ' Audio cleanup also failed. Close and reopen Murmur.'; }
     if (!this.current(epoch + 1)) return;
     this.update({ phase: 'error', caption: message, error: message });
     await this.ports.speech.say(message, this.abort.signal).catch(() => undefined);
