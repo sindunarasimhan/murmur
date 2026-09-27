@@ -41,6 +41,7 @@ export class LennyVoiceController {
   private disposed = false;
   private awaitingFinal = false;
   private resumeAfterConversation = false;
+  private pendingClarification = false;
   constructor(private readonly ports: ListeningPorts) {}
   private update(patch: Partial<VoiceState>) {
     if (this.disposed) return;
@@ -101,6 +102,11 @@ export class LennyVoiceController {
   }
   partial(text: string, item: string) {
     if (!this.state.microphone || this.disposed) return;
+    if (this.pendingClarification && ['idle', 'paused'].includes(this.state.phase)
+      && /^(?:yes(?:,? please)?|(?:please )?play (?:it|that)(?: please)?)[.!?]*$/i.test(text.trim())) {
+      this.update({ phase: 'listening', caption: 'I’m listening.' });
+      this.itemModes.set(item, true);
+    }
     const wake = wakeRequest(text);
     if (wake !== undefined && this.wakeItem !== item) {
       this.wakeItem = item; this.item = item; this.itemModes.set(item, true);
@@ -163,6 +169,7 @@ export class LennyVoiceController {
   }
   async submit(text: string, returning = false) {
     const epoch = this.next();
+    this.pendingClarification = false;
     this.ports.audio.pause(); await this.ports.speech.stop();
     if (!this.current(epoch)) return;
     this.update({ phase: 'thinking', heard: text, caption: 'Following your thought…', error: undefined });
@@ -177,6 +184,7 @@ export class LennyVoiceController {
         this.update({ episode: undefined });
       }
       if (resolution.kind === 'play' && resolution.episode) {
+        this.pendingClarification = false;
         await this.observe('cancel', epoch); if (!this.current(epoch)) return;
         const episode = resolution.episode;
         let session = await this.ports.api.open(episode.id);
@@ -230,6 +238,7 @@ export class LennyVoiceController {
           return;
         }
       } else {
+        this.pendingClarification = resolution.kind === 'clarify';
         this.history = [...this.history, text, resolution.message].slice(-4);
         await this.say(resolution.message, epoch);
       }
@@ -247,6 +256,7 @@ export class LennyVoiceController {
     if (this.state.phase !== 'playing') return;
     const epoch = this.next();
     this.resumeAfterConversation = false;
+    this.pendingClarification = false;
     try {
       await this.observe('pause', epoch);
       await this.say('That’s the end of the episode. What would you like to hear next?', epoch);
@@ -255,6 +265,7 @@ export class LennyVoiceController {
   }
   async shutdown(announce = false) {
     const epoch = this.next();
+    this.pendingClarification = false;
     this.update({ microphone: false, phase: 'idle' }); this.ports.audio.pause();
     await Promise.all([this.ports.microphone.stop(), this.ports.speech.stop()]);
     if (!this.current(epoch)) return;

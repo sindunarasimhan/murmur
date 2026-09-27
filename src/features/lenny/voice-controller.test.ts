@@ -44,6 +44,47 @@ test('wake phrase requires an explicit Hey Murmur and preserves the following re
   assert.equal(wakeRequest('podcast background. Hey, Murmur! What did she mean?'), 'What did she mean?');
   assert.equal(wakeRequest('Hey mur mur, skip this ad'), 'skip this ad');
 });
+test('play it still answers an outstanding offer after the follow-up window closes', async () => {
+  const s = setup(15);
+  const requests: string[] = [];
+  s.ports.api.resolve = async (text, _current, history) => {
+    requests.push(text);
+    if (text === 'play it') {
+      assert.deepEqual(history, ['What is available?', 'Would you like to play it?']);
+      return { kind: 'play', episode, message: 'Starting the episode.' };
+    }
+    return { kind: 'clarify', message: 'Would you like to play it?' };
+  };
+  try {
+    await s.controller.activate();
+    await s.controller.submit('What is available?');
+    await delay(25);
+    assert.equal(s.controller.state.phase, 'idle');
+    s.controller.partial('background conversation', 'background');
+    s.controller.final('background conversation', 'background');
+    assert.equal(requests.length, 1);
+    s.controller.partial('play', 'reply');
+    s.controller.partial('play it', 'reply');
+    s.controller.final('play it', 'reply');
+    await delay();
+    assert(s.playing);
+    assert.equal(s.controller.state.phase, 'playing');
+    assert.deepEqual(requests, ['What is available?', 'play it']);
+  } finally { await s.controller.dispose(); }
+});
+test('play it without an outstanding offer still requires a wake phrase when idle', async () => {
+  const s = setup(15);
+  let requests = 0;
+  s.ports.api.resolve = async () => { requests++; return { kind: 'play', episode, message: 'Starting.' }; };
+  try {
+    await s.controller.activate();
+    await delay(25);
+    s.controller.final('play it', 'ambient');
+    await delay();
+    assert.equal(requests, 0);
+    assert.equal(s.playing, false);
+  } finally { await s.controller.dispose(); }
+});
 test('idle invocation retains wake monitoring and reactivates without a button', async () => {
   const s = setup(15);
   try {
