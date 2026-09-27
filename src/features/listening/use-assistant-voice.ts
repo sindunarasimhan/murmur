@@ -3,6 +3,7 @@ import {
   setIsAudioActiveAsync,
   useAudioPlayer,
   useAudioPlayerStatus,
+  useAudioSampleListener,
   type AudioMode,
 } from 'expo-audio';
 import { File, Paths } from 'expo-file-system';
@@ -10,6 +11,7 @@ import * as Speech from 'expo-speech';
 import { useCallback, useEffect, useRef } from 'react';
 
 import { PLAYBACK_AUDIO_MODE } from '@/features/listening/audio-mode';
+import { speechEnergy } from './speech-energy';
 import {
   MurmurApiError,
   synthesizeSpeech,
@@ -63,7 +65,7 @@ function prepareAudio(speech: SynthesizedSpeech): PreparedAudio {
   };
 }
 
-export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnouncements = false, keepAudioSessionActive = false, remoteOnly = false }: { audioMode?: AudioMode; deviceAnnouncements?: boolean; keepAudioSessionActive?: boolean; remoteOnly?: boolean } = {}) {
+export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnouncements = false, keepAudioSessionActive = false, remoteOnly = false, onLevel }: { audioMode?: AudioMode; deviceAnnouncements?: boolean; keepAudioSessionActive?: boolean; remoteOnly?: boolean; onLevel?: (level: number) => void } = {}) {
   const player = useAudioPlayer(null, { updateInterval: 120, keepAudioSessionActive });
   const status = useAudioPlayerStatus(player);
   const sessionRef = useRef(0);
@@ -71,6 +73,14 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
   const preparedAudioRef = useRef<{ session: number; audio: PreparedAudio } | undefined>(undefined);
   const watchdogTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const startTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const levelCallback = useRef(onLevel);
+  const lastLevelAt = useRef(0);
+  useEffect(() => { levelCallback.current = onLevel; }, [onLevel]);
+  useAudioSampleListener(player, (sample) => {
+    if (!completionRef.current?.started || Date.now() - lastLevelAt.current < 65) return;
+    lastLevelAt.current = Date.now();
+    levelCallback.current?.(speechEnergy(sample.channels));
+  });
 
   const clearWatchdog = useCallback(() => {
     if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);

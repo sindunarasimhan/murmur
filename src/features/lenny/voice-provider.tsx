@@ -10,18 +10,19 @@ import { useAssistantVoice } from '@/features/listening/use-assistant-voice';
 import { LennyVoiceController, type VoiceState } from './voice-controller';
 import { ForegroundVoice } from './foreground-voice';
 import { NativeVoiceCapture } from './native-voice-capture';
-import type { PreparedEpisode } from '../../../shared/listening';
+import type { CaptionTrack, PreparedEpisode } from '../../../shared/listening';
 
 const initial: VoiceState = { phase: 'idle', microphone: false, caption: 'A good conversation starts with listening.', heard: '' };
-const Context = createContext<{ state: VoiceState; activate(): void; seconds: number; count: number; featured?: PreparedEpisode } | null>(null);
+const Context = createContext<{ state: VoiceState; activate(): void; seconds: number; count: number; featured?: PreparedEpisode; captions: CaptionTrack['cues']; captionsError?: string } | null>(null);
 
 export function LennyVoiceProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState(initial);
   const [count, setCount] = useState(0);
   const [featured, setFeatured] = useState<PreparedEpisode>();
+  const [captionResult, setCaptionResult] = useState<{ key: string; cues: CaptionTrack['cues']; error?: string }>();
   const player = useAudioPlayer(null, { updateInterval: 200, keepAudioSessionActive: true });
   const status = useAudioPlayerStatus(player);
-  const speech = useAssistantVoice({ audioMode: RECORDING_AUDIO_MODE, remoteOnly: true, keepAudioSessionActive: true });
+  const speech = useAssistantVoice({ audioMode: RECORDING_AUDIO_MODE, remoteOnly: true, keepAudioSessionActive: true, onLevel: (level) => controller.current?.speechEnergy(level) });
   const statusRef = useRef(status);
   useEffect(() => { statusRef.current = status; }, [status]);
   const controller = useRef<LennyVoiceController | undefined>(undefined);
@@ -152,7 +153,21 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (status.error && state.episode) void controller.current?.fail(new Error('The podcast audio stopped unexpectedly. Your place is saved.'));
   }, [state.episode, status.error]);
-  return <Context.Provider value={{ state, seconds: status.currentTime, count, featured, activate: () => { void controller.current?.activate(); } }}>{children}</Context.Provider>;
+  const episodeId = state.episode?.id;
+  const audioVersion = state.episode?.audioVersion;
+  const captionKey = `${episodeId}:${audioVersion}`;
+  useEffect(() => {
+    if (!episodeId || !audioVersion) return;
+    const abort = new AbortController();
+    void listeningApi.captions(episodeId, audioVersion, abort.signal).then((track) => {
+      if (!abort.signal.aborted) setCaptionResult({ key: `${episodeId}:${audioVersion}`, cues: track.cues, error: track.cues.length ? undefined : 'No timed captions are available for this recording.' });
+    }).catch(() => {
+      if (!abort.signal.aborted) setCaptionResult({ key: `${episodeId}:${audioVersion}`, cues: [], error: 'Captions are unavailable. Podcast audio can continue.' });
+    });
+    return () => abort.abort();
+  }, [episodeId, audioVersion]);
+  const currentCaptions = captionResult?.key === captionKey ? captionResult : undefined;
+  return <Context.Provider value={{ state, seconds: status.currentTime, count, featured, captions: currentCaptions?.cues ?? [], captionsError: currentCaptions?.error, activate: () => { void controller.current?.activate(); } }}>{children}</Context.Provider>;
 }
 export function useLennyVoice() {
   const value = useContext(Context);

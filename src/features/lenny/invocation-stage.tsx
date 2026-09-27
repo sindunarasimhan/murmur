@@ -1,20 +1,41 @@
+import { useEffect, useState } from 'react';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { demoEpisode } from '@/data/demo-episode';
 import { useReducedMotion } from '@/design/use-reduced-motion';
 import { AmbientPodcastRail } from '@/features/home/ambient-podcast-rail';
 import { MurmurMascot } from './murmur-mascot';
 import type { VoiceState } from './voice-controller';
+import { formatDuration } from '@/features/listening/format';
+import { captionAt, type PlaybackCaption } from './playback-captions';
 
 const backgroundEpisodes = [demoEpisode];
 
-export function InvocationStage({ state }: { state: VoiceState }) {
+type Props = { state: VoiceState; playbackEntered?: boolean; seconds?: number; captions?: readonly PlaybackCaption[]; captionsError?: string };
+
+export function InvocationStage({ state, playbackEntered = false, seconds = 0, captions = [], captionsError }: Props) {
   const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
+  const { width, height, fontScale } = useWindowDimensions();
   const reducedMotion = useReducedMotion();
   const listening = state.phase === 'listening' || state.phase === 'followup';
+  const playback = Boolean(state.episode && playbackEntered);
+  const transition = useSharedValue(playback ? 1 : 0);
+  const mascotSize = Math.min(width - 24, height * 0.44, 390);
+  const compactSize = 116;
+  const [introHeight, setIntroHeight] = useState(70);
+  useEffect(() => {
+    transition.value = withTiming(playback ? 1 : 0, { duration: reducedMotion ? 0 : 480, easing: Easing.inOut(Easing.cubic) });
+  }, [playback, reducedMotion, transition]);
+  const introStyle = useAnimatedStyle(() => ({ opacity: 1 - transition.value, height: introHeight * (1 - transition.value), overflow: 'hidden' }));
+  const mascotSpace = useAnimatedStyle(() => ({ height: mascotSize + (compactSize - mascotSize) * transition.value }));
+  const mascotMotion = useAnimatedStyle(() => ({ transform: [{ translateY: -(mascotSize - compactSize) / 2 * transition.value }, { scale: 1 - (1 - compactSize / mascotSize) * transition.value }] }));
+  const playerStyle = useAnimatedStyle(() => ({ opacity: transition.value, transform: [{ translateY: 18 * (1 - transition.value) }] }));
+  const transcript = captionAt(captions, seconds, Math.floor(Math.min(width - 52, 430) / (12 * fontScale)) * 2);
+  const captionStatus = captionsError ? 'Transcript unavailable. Audio can still play.' : !state.episode?.transcriptReady ? 'No transcript available for this episode.' : !captions.length ? 'Loading the episode transcript…' : '';
   const label = state.error ? 'LET’S RECONNECT' : listening ? 'I’M LISTENING' : state.phase === 'thinking' ? 'FINDING YOUR CONVERSATION' : state.phase === 'speaking' ? 'A LITTLE SOMETHING FOR YOU' : state.phase === 'connecting' ? 'GETTING READY' : state.microphone ? 'HERE WHEN YOU NEED ME' : 'A QUIET MOMENT';
   return <View style={styles.root}>
     <StatusBar style="dark" />
@@ -22,23 +43,40 @@ export function InvocationStage({ state }: { state: VoiceState }) {
       <AmbientPodcastRail episodes={backgroundEpisodes} reducedMotion={reducedMotion} speed={10} />
     </View>
     <LinearGradient pointerEvents="none" colors={['rgba(249,244,234,0.72)', 'rgba(249,244,234,0.2)', '#F1E8D9']} locations={[0, 0.4, 1]} style={StyleSheet.absoluteFill} />
-    <ScrollView contentContainerStyle={[styles.page, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 20 }]}>
+    <ScrollView contentInsetAdjustmentBehavior="never" contentContainerStyle={[styles.page, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 20 }]}>
       <View style={styles.header}>
         <Text style={styles.brand}>murmur</Text>
         <View style={styles.mic}><View style={[styles.dot, { backgroundColor: state.microphone ? '#728064' : '#B8A990' }]} /><Text style={styles.micText}>{state.microphone ? 'Mic on' : 'Mic off'}</Text></View>
       </View>
       <View style={styles.stage}>
-        <Text style={styles.eyebrow}>GOOD CONVERSATIONS, CLOSER.</Text>
-        <Text style={styles.title}>Where shall we go?</Text>
-        <View style={styles.mascot}><MurmurMascot size={Math.min(width - 24, height * 0.44, 390)} phase={state.speechPlaying ? 'speaking' : state.phase === 'speaking' ? 'thinking' : state.phase} reducedMotion={reducedMotion} /></View>
-        <View style={styles.labelRow}><View style={[styles.dot, { backgroundColor: state.error ? '#A36648' : '#7B876C' }]} /><Text style={styles.label}>{label}</Text></View>
-        <View style={styles.conversation}>
-          {state.heard ? <Text style={styles.transcript}>“{state.heard}”</Text> : <Text style={styles.prompt}>{listening ? 'Tell me what you’d like to hear.' : state.microphone ? 'Just say “Hey Murmur.”' : 'Your next conversation starts here.'}</Text>}
-          <Text accessibilityLiveRegion="polite" accessibilityRole={state.error ? 'alert' : 'text'} style={[styles.caption, state.error && styles.error]}>{state.caption}</Text>
+        <Animated.View style={[{ width: '100%' }, introStyle]} accessibilityElementsHidden={playback} importantForAccessibility={playback ? 'no-hide-descendants' : 'auto'}>
+          <View onLayout={({ nativeEvent }) => setIntroHeight(nativeEvent.layout.height)}>
+          <Text style={styles.eyebrow}>GOOD CONVERSATIONS, CLOSER.</Text>
+          <Text style={styles.title}>Where shall we go?</Text>
+          </View>
+        </Animated.View>
+        <Animated.View style={[styles.mascot, { width: mascotSize }, mascotSpace]}><Animated.View style={mascotMotion}><MurmurMascot size={mascotSize} phase={state.speechPlaying ? 'speaking' : state.phase === 'speaking' ? 'thinking' : state.phase} level={state.speechLevel} reducedMotion={reducedMotion} /></Animated.View></Animated.View>
+        <View style={styles.labelRow}><View style={[styles.dot, { backgroundColor: state.error ? '#A36648' : '#7B876C' }]} /><Text style={styles.label}>{playback && state.phase === 'playing' ? state.microphone ? 'PLAYING · HERE IF YOU NEED ME' : 'PLAYING · MICROPHONE OFF' : playback && state.phase === 'paused' ? 'YOUR PLACE IS SAVED' : label}</Text></View>
+        {playback && state.episode ? <Animated.View style={[styles.player, playerStyle]}>
+          <View style={styles.artworkFrame}>
+            {state.episode.artworkUrl ? <Image source={{ uri: state.episode.artworkUrl }} style={styles.artwork} contentFit="cover" accessibilityLabel={`${state.episode.showTitle} artwork`} /> : <View style={[styles.artwork, styles.artworkFallback]}><Text style={styles.brand}>{state.episode.showTitle}</Text></View>}
+          </View>
+          <Text selectable style={styles.episodeGuest}>{state.episode.guest}</Text>
+          <Text selectable numberOfLines={2} style={styles.episodeTitle}>{state.episode.title}</Text>
+          <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${Math.max(0, Math.min(100, seconds / Math.max(1, state.episode.durationSeconds) * 100))}%` }]} /></View>
+          <Text style={styles.time}>{formatDuration(seconds)} / {formatDuration(state.episode.durationSeconds)}</Text>
+          <View style={styles.episodeTranscript}>
+            <Text selectable numberOfLines={2} style={styles.currentLine}>{transcript || captionStatus || ' '}</Text>
+          </View>
+          {captions.length > 0 ? <Text style={styles.timingNote}>Transcript timing is approximate within each segment.</Text> : null}
+        </Animated.View> : null}
+        <View style={[styles.conversation, playback && styles.playbackConversation]}>
+          {state.heard && (!playback || state.phase !== 'playing') ? <Text selectable style={[styles.transcript, playback && styles.playbackHeard]}>“{state.heard}”</Text> : !playback ? <Text style={styles.prompt}>{listening ? 'Tell me what you’d like to hear.' : state.microphone ? 'Just say “Hey Murmur.”' : 'Your next conversation starts here.'}</Text> : null}
+          {(!playback || state.phase !== 'playing') ? <Text selectable accessibilityLiveRegion="polite" accessibilityRole={state.error ? 'alert' : 'text'} style={[styles.caption, state.error && styles.error]}>{state.caption}</Text> : null}
         </View>
       </View>
       <View style={styles.footer}>
-        <Text style={styles.hint}>{state.microphone ? '“Play Lenny’s podcast” · “Stop listening”' : state.error ? 'Check microphone access and connection, then reopen.' : state.phase === 'connecting' ? 'Allow microphone access to talk with Murmur.' : 'Listening resumes when you reopen the app.'}</Text>
+        <Text style={styles.hint}>{state.microphone ? playback ? '“Hey Murmur, skip this ad” · “Stop listening”' : '“Play Lenny’s podcast” · “Stop listening”' : state.error ? 'Check microphone access and connection, then reopen.' : state.phase === 'connecting' ? 'Allow microphone access to talk with Murmur.' : 'Listening resumes when you reopen the app.'}</Text>
         <Text style={styles.disclosure}>While the mic is on, audio is sent to OpenAI, including while waiting for “Hey Murmur.” Replies use an AI voice. Lenny’s collection is available in this preview.</Text>
       </View>
     </ScrollView>
@@ -52,10 +90,24 @@ const styles = StyleSheet.create({
   brand: { color: '#514A3D', fontFamily: 'Newsreader_400Regular', fontSize: 32, letterSpacing: -1.7 },
   mic: { flexDirection: 'row', alignItems: 'center', gap: 6 }, dot: { width: 5, height: 5, borderRadius: 4 },
   micText: { color: '#807562', fontSize: 11, fontFamily: 'Manrope_500Medium' },
-  stage: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 32, paddingBottom: 24 },
+  stage: { flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 24, paddingBottom: 24 },
   eyebrow: { color: '#968773', fontSize: 9, letterSpacing: 2.4, fontFamily: 'Manrope_600SemiBold', textAlign: 'center' },
   title: { color: '#514A3D', fontFamily: 'Newsreader_400Regular', fontSize: 37, lineHeight: 44, textAlign: 'center', marginTop: 12 },
   mascot: { marginTop: 2, marginBottom: 4 },
+  player: { alignItems: 'center', width: '100%', maxWidth: 430, gap: 9, paddingTop: 20 },
+  artworkFrame: { padding: 8, backgroundColor: '#F4EDE1', borderRadius: 26, borderCurve: 'continuous', boxShadow: '8px 10px 22px #D5C9B6, -6px -6px 18px #FFFBF3', marginBottom: 9 },
+  artwork: { width: 174, height: 174, borderRadius: 19 },
+  artworkFallback: { alignItems: 'center', justifyContent: 'center', padding: 18 },
+  episodeGuest: { color: '#514A3D', fontFamily: 'Newsreader_400Regular', fontSize: 28, lineHeight: 32, textAlign: 'center' },
+  episodeTitle: { color: '#817561', fontFamily: 'Manrope_400Regular', fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  progressTrack: { width: '82%', height: 3, backgroundColor: '#DED4C4', borderRadius: 3, overflow: 'hidden', marginTop: 6 },
+  progressFill: { height: '100%', backgroundColor: '#818C71' },
+  time: { color: '#928571', fontFamily: 'Manrope_400Regular', fontSize: 10, fontVariant: ['tabular-nums'] },
+  episodeTranscript: { minHeight: 68, width: '100%', alignItems: 'center', justifyContent: 'center', paddingTop: 10 },
+  currentLine: { color: '#585344', fontFamily: 'Newsreader_400Regular', fontSize: 22, lineHeight: 29, textAlign: 'center' },
+  timingNote: { color: '#928571', fontFamily: 'Manrope_400Regular', fontSize: 9, textAlign: 'center' },
+  playbackConversation: { minHeight: 0, marginTop: 8 },
+  playbackHeard: { fontSize: 19, lineHeight: 25 },
   labelRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   label: { color: '#7F826B', fontFamily: 'Manrope_600SemiBold', fontSize: 9, letterSpacing: 1.8 },
   conversation: { minHeight: 98, alignItems: 'center', justifyContent: 'center', gap: 9, marginTop: 14, maxWidth: 430 },

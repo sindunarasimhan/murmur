@@ -1,7 +1,7 @@
 import type { CatalogResolution, ListeningSession, Observation, PreparedEpisode, TurnResult } from '../../../shared/listening';
 
 export type VoicePhase = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'followup' | 'playing' | 'paused' | 'error';
-export type VoiceState = { phase: VoicePhase; microphone: boolean; speechPlaying?: boolean; episode?: PreparedEpisode; caption: string; heard: string; error?: string };
+export type VoiceState = { phase: VoicePhase; microphone: boolean; speechPlaying?: boolean; speechLevel?: number; episode?: PreparedEpisode; caption: string; heard: string; error?: string };
 export type ListeningPorts = {
   uuid(): string;
   audio: { position(): number; load(episode: PreparedEpisode, position: number, signal: AbortSignal): Promise<void>; play(): void; pause(): void; seek(seconds: number): Promise<number>; clear(): void };
@@ -48,7 +48,7 @@ export class LennyVoiceController {
   }
   private current(epoch: number) { return !this.disposed && epoch === this.epoch; }
   private next() {
-    this.update({ speechPlaying: false });
+    this.update({ speechPlaying: false, speechLevel: 0 });
     this.abort.abort(); this.abort = new AbortController(); clearTimeout(this.timer); clearTimeout(this.speakingDeadline);
     this.speakingDeadline = undefined;
     this.awaitingFinal = false; return ++this.epoch;
@@ -151,7 +151,10 @@ export class LennyVoiceController {
     }, this.ports.followupMs ?? 6000);
   }
   speechActivity(playing: boolean) {
-    this.update({ speechPlaying: playing });
+    this.update({ speechPlaying: playing, speechLevel: 0 });
+  }
+  speechEnergy(level: number) {
+    if (this.state.speechPlaying) this.update({ speechLevel: level });
   }
   private async say(text: string, epoch: number, turn?: TurnResult) {
     if (!this.current(epoch)) return;

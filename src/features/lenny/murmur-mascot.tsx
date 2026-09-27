@@ -4,9 +4,9 @@ import { StyleSheet, View } from 'react-native';
 import Animated, { cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import type { VoicePhase } from './voice-controller';
 
-type Props = { size: number; phase: VoicePhase; reducedMotion: boolean };
+type Props = { size: number; phase: VoicePhase; reducedMotion: boolean; level?: number };
 
-export function MurmurMascot({ size, phase, reducedMotion }: Props) {
+export function MurmurMascot({ size, phase, reducedMotion, level = 0 }: Props) {
   const blink = useSharedValue(1);
   const breath = useSharedValue(0);
   const voice = useSharedValue(0);
@@ -20,12 +20,12 @@ export function MurmurMascot({ size, phase, reducedMotion }: Props) {
   }, [blink, breath, reducedMotion]);
   useEffect(() => {
     cancelAnimation(voice);
-    voice.value = phase === 'speaking' && !reducedMotion ? withRepeat(withTiming(1, { duration: 190 }), -1, true) : 0;
+    voice.value = withTiming(phase === 'speaking' && !reducedMotion ? Math.min(1, Math.max(0, level)) : 0, { duration: 95 });
     return () => cancelAnimation(voice);
-  }, [phase, reducedMotion, voice]);
+  }, [phase, reducedMotion, voice, level]);
   const bodyStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -breath.value * 5 }, { rotate: `${attentive ? -2 : 0}deg` }] }));
   const eyeStyle = useAnimatedStyle(() => ({ transform: [{ scaleY: blink.value }] }));
-  const mouthStyle = useAnimatedStyle(() => ({ height: size * (phase === 'speaking' ? 0.026 + voice.value * 0.03 : 0.025), transform: [{ rotate: '-12deg' }] }));
+  const mouthStyle = useAnimatedStyle(() => ({ height: size * (0.013 + voice.value * 0.019), width: size * (0.105 - voice.value * 0.018), backgroundColor: voice.value > 0.12 ? '#49382D' : 'transparent', transform: [{ rotate: '-12deg' }] }));
   return <View accessible accessibilityLabel={`Murmur, ${phase}`} style={{ width: size, height: size }}>
     <View style={[styles.shadow, { width: size * 0.48, left: size * 0.27, bottom: size * 0.055 }]} />
     <Animated.View style={[StyleSheet.absoluteFill, bodyStyle]}>
