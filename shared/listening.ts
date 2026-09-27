@@ -22,7 +22,7 @@ export type Evidence = z.infer<typeof evidenceSchema>;
 export type Observation = z.infer<typeof observationSchema>;
 export type TurnRequest = z.infer<typeof turnRequestSchema>;
 export const actionSchema = z.object({
-  id: z.uuid(), kind: z.enum(['play', 'pause', 'seek', 'return', 'skip-ad']),
+  id: z.uuid(), kind: z.enum(['play', 'pause', 'seek', 'return', 'skip-ad', 'skip-intro']),
   positionSeconds: positionSchema, play: z.boolean(),
 });
 export type PlaybackAction = z.infer<typeof actionSchema>;

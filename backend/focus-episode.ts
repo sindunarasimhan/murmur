@@ -9,6 +9,7 @@ import { parseLennyTranscript } from './lenny-catalog';
 export const FOCUS_EPISODE_ID = 'lenny-brian-halligan';
 export const FOCUS_AUDIO_SHA = '5d55b98600573b347a83c80f180ed22ff30032f05f897fa4a53206d4cf0e8303';
 export const FOCUS_TRANSCRIPT_SHA = 'ede70eb67f2af35f116680fa284ae3a82bb375b10848763e56d9ea31fdb8f76e';
+export const FOCUS_INTRO_END = 245.3;
 const AUDIO_URL = 'https://pscrb.fm/rss/p/api.substack.com/feed/podcast/187154837/0c611c6487a4ace2157de90893760367.mp3';
 const digest = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
 
@@ -46,5 +47,6 @@ export async function prepareFocusEpisode(pool: Pool, objects: ObjectStore, sour
       [FOCUS_EPISODE_ID, FOCUS_AUDIO_SHA, segment.id, segment.startSeconds, segment.endSeconds, segment.text]);
     await db.query(`UPDATE episodes SET audio_key=$2,audio_url=NULL,audio_version=$3,duration_seconds=4477,ad_breaks=$4,status='ready',prepared_at=now() WHERE id=$1`,
       [FOCUS_EPISODE_ID, key, FOCUS_AUDIO_SHA, JSON.stringify(ads)]);
+    await db.query('UPDATE episodes SET intro_boundary=$2 WHERE id=$1', [FOCUS_EPISODE_ID, JSON.stringify({ endSeconds: FOCUS_INTRO_END, audioVersion: FOCUS_AUDIO_SHA, source: 'audio-alignment' })]);
   });
 }

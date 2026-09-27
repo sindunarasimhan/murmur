@@ -28,6 +28,11 @@ export class ListeningService {
       controller.signal.throwIfAborted();
       let action = playbackAction(decision, session, episode.durationSeconds);
       let adResult: Awaited<ReturnType<Repository['currentAd']>> | undefined;
+      let introResult: Awaited<ReturnType<Repository['currentIntro']>> | undefined;
+      if (decision.kind === 'skip-intro') {
+        introResult = await this.repository.currentIntro(session);
+        if (introResult.kind === 'skip') action = { ...playbackAction({ kind: 'seek', source: 'code', position: introResult.endSeconds }, session, episode.durationSeconds)!, kind: 'skip-intro' };
+      }
       if (decision.kind === 'skip-ad') {
         adResult = await this.repository.currentAd(session);
         if (adResult.kind === 'skip') action = { ...playbackAction({ kind: 'seek', source: 'code', position: adResult.ad.endSeconds }, session, episode.durationSeconds)!, kind: 'skip-ad' };
@@ -36,11 +41,12 @@ export class ListeningService {
         const passage = candidates.find((item) => item.id === decision.passageId);
         if (passage) action = playbackAction({ kind: 'seek', source: 'jev', delta: passage.startSeconds - session.positionSeconds }, session, episode.durationSeconds);
       }
-      if (action && ['seek', 'skip-ad'].includes(action.kind)) action.play = input.resumeAfterAction ?? true;
+      if (action && ['seek', 'skip-ad', 'skip-intro'].includes(action.kind)) action.play = input.resumeAfterAction ?? true;
       let answer = '';
       let evidence = candidates.filter((item) => item.id === decision.passageId);
       if (!action) {
         if (decision.kind === 'skip-ad') answer = adResult?.kind === 'outside-ad' ? 'There isn’t an ad to skip at this point.' : 'I can’t verify an ad ending here. You can tell me how many seconds to skip.';
+        else if (decision.kind === 'skip-intro') answer = introResult?.kind === 'past-intro' ? 'We’re already past the intro.' : 'I don’t have a verified intro ending for this recording, so I won’t guess where to jump.';
         else if (decision.kind === 'unclear') answer = 'Would you like an explanation, or a playback action?';
         else if (!evidence.length) answer = 'I do not have a matching passage for that question. Try asking about the part we just heard.';
         else {
@@ -50,7 +56,7 @@ export class ListeningService {
         }
       }
       controller.signal.throwIfAborted();
-      return await this.repository.completeTurn(owner, session, input.requestId, { answer, evidence, action, decision: decision.source, followUp: decision.kind !== 'skip-ad' || adResult?.kind === 'unverified' });
+      return await this.repository.completeTurn(owner, session, input.requestId, { answer, evidence, action, decision: decision.source, followUp: decision.kind === 'skip-intro' ? introResult?.kind === 'unverified' : decision.kind !== 'skip-ad' || adResult?.kind === 'unverified' });
     } catch (error) {
       await this.repository.failTurn(session, input.requestId, controller.signal.aborted ? 'cancelled' : 'provider_error');
       if (controller.signal.aborted) throw new ServiceError(409, 'turn_cancelled', 'That request was stopped. Your place is saved.');

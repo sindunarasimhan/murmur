@@ -222,6 +222,7 @@ export class LennyVoiceController {
           });
           if (!this.current(epoch)) return;
           await this.say(action.kind === 'skip-ad' ? action.play ? 'Ad skipped. Back to Lenny.' : 'Ad skipped. Still paused.'
+            : action.kind === 'skip-intro' ? action.play ? 'Here’s the conversation.' : 'Intro skipped. Still paused.'
             : action.play ? action.kind === 'seek' ? 'Picking up here.' : 'Back to Lenny.' : action.kind === 'seek' ? 'Moved there. Still paused.' : 'Paused.', epoch);
           if (!this.current(epoch)) return;
           if (turn.action.play) this.ports.audio.play();

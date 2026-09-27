@@ -44,6 +44,27 @@ test('wake phrase requires an explicit Hey Murmur and preserves the following re
   assert.equal(wakeRequest('podcast background. Hey, Murmur! What did she mean?'), 'What did she mean?');
   assert.equal(wakeRequest('Hey mur mur, skip this ad'), 'skip this ad');
 });
+for (const resume of [true, false]) {
+  test(`intro skip acknowledges the actual seek and preserves ${resume ? 'playing' : 'paused'} state`, async () => {
+    const s = setup();
+    try {
+      await s.controller.activate();
+      await s.controller.submit('play Lenny');
+      s.seek(30);
+      if (!resume) await s.controller.submit('pause');
+      s.ports.api.turn = async (session, _text, _position, requestId, _signal, resumeAfterAction) => {
+        assert.equal(resumeAfterAction, resume);
+        const action: PlaybackAction = { id: 'intro', kind: 'skip-intro', positionSeconds: 245.3, play: resumeAfterAction ?? true };
+        return { session: { ...session, pendingAction: action }, action, requestId, answer: '', decision: 'jev', evidence: [], followUp: false };
+      };
+      await s.controller.submit('Get to the actual conversation');
+      assert.equal(s.position, 245.3);
+      assert.equal(s.playing, resume);
+      assert.equal(s.controller.state.phase, resume ? 'playing' : 'paused');
+      assert.equal(s.spoken.at(-1), resume ? 'Here’s the conversation.' : 'Intro skipped. Still paused.');
+    } finally { await s.controller.dispose(); }
+  });
+}
 for (const reply of ['play it', 'Sounds good, let’s hear that', 'Go ahead with the one you mentioned', 'Put that on for me']) {
 test(`a delayed contextual reply reaches interpretation without a phrase gate: ${reply}`, async () => {
   const s = setup(15);

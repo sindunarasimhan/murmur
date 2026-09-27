@@ -6,7 +6,7 @@ import { EXPLORE_SYSTEM_INSTRUCTIONS } from '../src/server/exploration/explore-p
 import type { BackendConfig } from './config';
 import { ServiceError } from './errors';
 
-export type Decision = { kind: 'explain' | 'deeper' | 'play' | 'pause' | 'return' | 'seek' | 'topic' | 'skip-ad' | 'unclear'; source: 'code' | 'jev' | 'unavailable'; delta?: number; position?: number; passageId?: string };
+export type Decision = { kind: 'explain' | 'deeper' | 'play' | 'pause' | 'return' | 'seek' | 'topic' | 'skip-ad' | 'skip-intro' | 'unclear'; source: 'code' | 'jev' | 'unavailable'; delta?: number; position?: number; passageId?: string };
 function spokenNumber(value: string): number {
   if (/^\d{1,3}$/.test(value)) return Number(value);
   const small = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
@@ -44,6 +44,7 @@ const actionQuestion: ChoiceQuestion = {
     pause: 'An unambiguous instruction to pause playback.',
     return: 'Leave the explanation or conversation and return to the podcast at the saved position.',
     'skip-ad': 'An instruction to skip the current advertisement. Not a question about advertising, a request to keep listening, or a preference to automatically skip future ads.',
+    'skip-intro': 'An instruction to bypass the opening, teaser, introductions or preamble and start the main interview or actual conversation in the current episode. Not a question about the intro, a refusal to skip, or a request for a different episode.',
     topic: 'Jump or skip to a passage about a named topic in the CURRENT episode, rather than explain it.',
     unclear: 'None of these actions clearly captures the request; clarification is needed.',
   },
@@ -66,6 +67,7 @@ export function createIntelligence(config: BackendConfig, choices: typeof askCho
           instructions: 'What target is explicitly named in the listener’s `utterance`? Use the utterance, not the retrieved episode content. "This ad" and "that sponsor" explicitly name advertising; "this" alone and "the boring part" do not. This is independent of whether they actually command a skip.',
           criteria: {
             advertisement: 'Names an ad, advertisement, sponsor, sponsorship, commercial, promotional message, or advertising break. A sponsor in a podcast request is an advertisement.',
+            introduction: 'Targets the opening, intro, teaser or preamble, or asks to get to the main interview, actual conversation or first substantive question.',
             topic: 'Names an interview topic or a numeric time destination.',
             unspecified: 'No explicit target, a vague part, or no matching target.',
           },
@@ -79,6 +81,7 @@ export function createIntelligence(config: BackendConfig, choices: typeof askCho
       const action = answers.action;
       if ((action.probabilities[action.choice] ?? 0) < 0.7 || action.confidence < 0.45) return { kind: 'unclear', source: 'jev' };
       if (action.choice === 'skip-ad' && (answers.skipTarget.choice !== 'advertisement' || (answers.skipTarget.probabilities.advertisement ?? 0) < 0.85)) return { kind: 'unclear', source: 'jev' };
+      if (action.choice === 'skip-intro' && (answers.skipTarget.choice !== 'introduction' || (answers.skipTarget.probabilities.introduction ?? 0) < 0.85)) return { kind: 'unclear', source: 'jev' };
       const passage = answers.passage;
       return { kind: action.choice as Decision['kind'], source: 'jev', passageId: passage.choice === 'none' || action.choice === 'topic' && (passage.probabilities[passage.choice] ?? 0) < 0.7 ? undefined : passage.choice };
     },

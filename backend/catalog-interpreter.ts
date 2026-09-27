@@ -28,7 +28,7 @@ const actionQuestion: ChoiceQuestion = {
   criteria: {
     choose: 'Play or find an episode by show, guest, title, or topic; or select an episode offered in history.',
     resume: 'Resume previous listening without naming a new show, guest, episode, or topic.',
-    current: 'Ask about, explain, go deeper, skip an ad, jump to a topic, or control the current episode. Questions about a guest already playing stay in this episode.',
+    current: 'Ask about, explain, go deeper, skip an ad or intro, get to the main interview, jump to a topic, or control the current episode. Questions about a guest already playing stay in this episode.',
     stop: 'Explicitly stop listening or switch off the microphone.',
     home: 'Return to the home or library screen.',
     unclear: 'An unsupported request, unrelated show, conflicting commands, or insufficient information.',

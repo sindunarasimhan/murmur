@@ -4,6 +4,7 @@ import { sessionSchema, type ListeningSession, type Observation, type TurnReques
 import { transaction } from './database';
 import { ServiceError, missing, stale } from './errors';
 import { resolveAd, type AdResolution } from './ad-policy';
+import { resolveIntro, type IntroResolution } from './intro-policy';
 
 const sessionColumns = `id, episode_id AS "episodeId", audio_version AS "audioVersion", revision,
   position_seconds AS "positionSeconds", bookmark_seconds AS "bookmarkSeconds", phase,
@@ -66,6 +67,11 @@ export class Repository {
     const position = session.bookmarkSeconds ?? session.positionSeconds;
     const episode = result.rows[0];
     return episode ? resolveAd(position, episode.duration_seconds, session.audioVersion, episode.ad_breaks, episode.audio_key) : { kind: 'unverified' };
+  }
+  async currentIntro(session: ListeningSession): Promise<IntroResolution> {
+    const result = await this.pool.query('SELECT intro_boundary,audio_key,duration_seconds FROM episodes WHERE id=$1 AND audio_version=$2', [session.episodeId, session.audioVersion]);
+    const episode = result.rows[0];
+    return episode ? resolveIntro(session.bookmarkSeconds ?? session.positionSeconds, episode.duration_seconds, session.audioVersion, episode.intro_boundary, episode.audio_key) : { kind: 'unverified' };
   }
   async openSession(owner: string, episodeId: string): Promise<ListeningSession> {
     const result = await this.pool.query(`INSERT INTO listening_sessions(id,owner_id,episode_id,audio_version)
@@ -153,8 +159,9 @@ export class Repository {
       const session = await this.session(owner, id, client, true);
       await this.validateSnapshot(client, session, input);
       const action = session.pendingAction;
-      const tolerance = action?.kind === 'skip-ad' ? 0.25 : 1;
-      if (!action || action.id !== input.actionId || Math.abs(action.positionSeconds - input.positionSeconds) > tolerance || action.kind === 'skip-ad' && input.positionSeconds < action.positionSeconds - 0.05) throw stale();
+      const boundedSkip = action?.kind === 'skip-ad' || action?.kind === 'skip-intro';
+      const tolerance = boundedSkip ? 0.25 : 1;
+      if (!action || action.id !== input.actionId || Math.abs(action.positionSeconds - input.positionSeconds) > tolerance || boundedSkip && input.positionSeconds < action.positionSeconds - 0.05) throw stale();
       const result = await client.query(`UPDATE listening_sessions SET revision=revision+1,position_seconds=$2,bookmark_seconds=NULL,
         phase=$3,pending_action=NULL,updated_at=now() WHERE id=$1 RETURNING ${sessionColumns}`, [id, input.positionSeconds, action.play ? 'playing' : 'paused']);
       return sessionSchema.parse(result.rows[0]);
