@@ -98,6 +98,19 @@ test('PostgreSQL, preparation jobs, and authenticated listening work together', 
         assert.deepEqual(matches.rows, [{ id: 'experiment' }]);
       } finally { await restarted.stop(); }
     });
+    await t.test('captions require identity and match the exact recording version', async () => {
+      const user = await guest();
+      const episode = await repository.episode();
+      const url = `/v2/catalog/small-places/captions?audioVersion=${episode.audioVersion}`;
+      assert.equal((await app.inject({ url })).statusCode, 401);
+      const response = await app.inject({ url, headers: headers(user.token) });
+      assert.equal(response.statusCode, 200);
+      const track = response.json();
+      assert.equal(track.audioVersion, episode.audioVersion);
+      assert.equal(track.cues.length, 5);
+      assert(track.cues.every((cue: {startSeconds:number;endSeconds:number;text:string}) => cue.startSeconds < cue.endSeconds && cue.text.length > 0));
+      assert.equal((await app.inject({ url: `/v2/catalog/small-places/captions?audioVersion=${'0'.repeat(64)}`, headers: headers(user.token) })).statusCode, 409);
+    });
     await t.test('markers do not authenticate callers, and sessions belong to their guest', async () => {
       const a = await guest(); const b = await guest(); const session = await open(a.token);
       assert.equal((await app.inject({ method: 'POST', url: '/v2/sessions', headers: headers(), payload: { episodeId: 'small-places' } })).statusCode, 401);

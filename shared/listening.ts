@@ -49,6 +49,11 @@ export const episodeSchema = z.object({
   sourceUrl: z.string().nullable().optional(), artworkUrl: z.string().nullable().optional(),
 });
 export type PreparedEpisode = z.infer<typeof episodeSchema>;
+export const captionTrackSchema = z.object({
+  audioVersion: z.string().regex(/^[a-f0-9]{64}$/),
+  cues: z.array(z.object({ startSeconds: positionSchema, endSeconds: positionSchema, text: z.string() })),
+});
+export type CaptionTrack = z.infer<typeof captionTrackSchema>;
 export const catalogResolutionSchema = z.object({
   kind: z.enum(['play', 'current', 'clarify', 'stop', 'home']),
   episode: episodeSchema.optional(), message: z.string(),

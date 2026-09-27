@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { catalogResolutionSchema, episodeSchema, sessionSchema, turnResultSchema, type ListeningSession, type Observation, type TurnRequest } from '../../../shared/listening';
+import { captionTrackSchema, catalogResolutionSchema, episodeSchema, sessionSchema, turnResultSchema, type ListeningSession, type Observation, type TurnRequest } from '../../../shared/listening';
 import { resolveApiBaseUrl, resolveExpoDevelopmentHostUri, type SynthesizedSpeech } from './murmur-api-client';
 
 export class ListeningApiError extends Error {
@@ -61,6 +61,7 @@ async function json<T>(path: string, method: string, schema: z.ZodType<T>, body?
   catch (error) { if (error instanceof ListeningApiError && error.status === 401) initialization = undefined; throw error; }
 }
 export const listeningApi = {
+  captions: (episodeId: string, audioVersion: string, signal?: AbortSignal) => json(`/catalog/${encodeURIComponent(episodeId)}/captions?audioVersion=${encodeURIComponent(audioVersion)}`, 'GET', captionTrackSchema, undefined, signal),
   catalog: (signal?: AbortSignal) => json('/catalog', 'GET', z.array(episodeSchema), undefined, signal),
   resolve: (utterance: string, currentEpisodeId: string | undefined, history: string[], signal?: AbortSignal) => json('/catalog/resolve', 'POST', catalogResolutionSchema, { utterance, currentEpisodeId, history }, signal),
   liveTicket: (signal?: AbortSignal) => json('/live-voice-ticket', 'POST', z.object({ token: z.string(), leaseMilliseconds: z.number() }), {}, signal),

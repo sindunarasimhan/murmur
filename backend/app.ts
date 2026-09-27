@@ -70,6 +70,15 @@ export async function createApp(options: { config: BackendConfig; pool: Pool; ob
   });
   app.get('/v2/episode', () => repository.episode());
   app.get('/v2/catalog', () => repository.catalog());
+  app.get('/v2/catalog/:episodeId/captions', async (request) => {
+    await owner(request);
+    const id = z.string().regex(/^(small-places|lenny-[a-z0-9_-]+)$/).parse((request.params as { episodeId: string }).episodeId);
+    const { audioVersion } = z.object({ audioVersion: z.string().regex(/^[a-f0-9]{64}$/) }).parse(request.query);
+    const episode = await repository.episode(id);
+    if (episode.audioVersion !== audioVersion) throw new ServiceError(409, 'audio_changed', 'The recording changed. Reopen the episode to load matching captions.');
+    const result = await pool.query('SELECT start_seconds AS "startSeconds",end_seconds AS "endSeconds",text FROM transcript_segments WHERE episode_id=$1 AND audio_version=$2 ORDER BY start_seconds,id', [id, audioVersion]);
+    return { audioVersion, cues: result.rows };
+  });
   app.get('/v2/catalog/:episodeId', (request) => repository.episode(z.string().regex(/^lenny-[a-z0-9_-]+$/).parse((request.params as { episodeId: string }).episodeId)));
   app.post('/v2/catalog/resolve', async (request, reply) => {
     const input = z.object({ utterance: z.string().trim().min(1).max(1000), currentEpisodeId: z.string().optional(), history: z.array(z.string().max(2000)).max(4).default([]) }).strict().parse(request.body);
