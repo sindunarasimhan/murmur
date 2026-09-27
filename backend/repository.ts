@@ -12,11 +12,11 @@ const sessionColumns = `id, episode_id AS "episodeId", audio_version AS "audioVe
 export const hashToken = (value: string) => createHash('sha256').update(value).digest('hex');
 
 export class Repository {
-  constructor(readonly pool: Pool, private readonly limits: { dailyUserCalls: number; dailyProjectCalls: number; focusEpisodeId?: string | null }) {}
+  constructor(readonly pool: Pool, private readonly limits: { dailyUserCalls: number; dailyProjectCalls: number; dailyIdentityCreates?: number; focusEpisodeId?: string | null }) {}
 
   private async bucket(client: PoolClient, scope: string, limit: number) {
     const result = await client.query(`INSERT INTO usage_buckets(scope,calls) VALUES($1,1)
-      ON CONFLICT(scope,day) DO UPDATE SET calls=usage_buckets.calls+1 WHERE usage_buckets.calls < $2 RETURNING calls`, [scope, limit]);
+      ON CONFLICT(scope,day) DO UPDATE SET calls=usage_buckets.calls+1 WHERE $2 = 0 OR usage_buckets.calls < $2 RETURNING calls`, [scope, limit]);
     if (!result.rowCount) throw new ServiceError(429, 'daily_limit', 'The daily testing allowance has been reached. Please try again tomorrow.');
   }
   async charge(owner: string, client?: PoolClient) {
@@ -28,7 +28,7 @@ export class Repository {
   }
   async createIdentity(ip: string) {
     return transaction(this.pool, async (client) => {
-      await this.bucket(client, `signup:${hashToken(ip)}`, 20);
+      await this.bucket(client, `signup:${hashToken(ip)}`, this.limits.dailyIdentityCreates ?? 0);
       const id = randomUUID();
       const token = randomBytes(32).toString('base64url');
       await client.query('INSERT INTO identities(id,token_hash) VALUES($1,$2)', [id, hashToken(token)]);

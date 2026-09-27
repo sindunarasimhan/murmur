@@ -215,6 +215,29 @@ test('PostgreSQL, preparation jobs, and authenticated listening work together', 
       const attempts = await Promise.allSettled([limited.charge(user.id), limited.charge(user.id), limited.charge(user.id)]);
       assert.equal(attempts.filter((value) => value.status === 'fulfilled').length, 1);
     });
+    await t.test('disabled caps allow exhausted accounts and signup buckets while preserving counts', async () => {
+      const unlimited = new Repository(pool, { dailyProjectCalls: 0, dailyUserCalls: 0 });
+      const ip = `uncapped-${randomUUID()}`;
+      const user = await unlimited.createIdentity(ip);
+      const { hashToken } = await import('./repository');
+      const scopes = ['project:provider', `identity:${user.id}`, `signup:${hashToken(ip)}`];
+      const previous = await pool.query('SELECT calls FROM usage_buckets WHERE scope=$1 AND day=current_date', [scopes[0]]);
+      try {
+        for (const scope of scopes) await pool.query(`INSERT INTO usage_buckets(scope,calls) VALUES($1,5000)
+          ON CONFLICT(scope,day) DO UPDATE SET calls=5000`, [scope]);
+        await Promise.all([unlimited.charge(user.id), unlimited.charge(user.id)]);
+        const next = await unlimited.createIdentity(ip);
+        assert(next.token);
+        for (const scope of scopes) {
+          const result = await pool.query('SELECT calls FROM usage_buckets WHERE scope=$1 AND day=current_date', [scope]);
+          assert.equal(result.rows[0].calls, scope === scopes[2] ? 5001 : 5002);
+        }
+        await unlimited.deleteIdentity(next.id);
+      } finally {
+        await pool.query('UPDATE usage_buckets SET calls=$2 WHERE scope=$1 AND day=current_date', [scopes[0], previous.rows[0].calls]);
+        await unlimited.deleteIdentity(user.id);
+      }
+    });
     await t.test('media ranges preserve the source bytes and reject invalid or private object names', async () => {
       const episode = await repository.episode(); const url = `/v2${episode.audioPath}`;
       const full = await app.inject({ url });
