@@ -40,7 +40,8 @@ const actionQuestion: ChoiceQuestion = {
   criteria: {
     explain: 'A question or request to explain what the episode says, including what was just said.',
     deeper: 'Explore an idea, its tradeoffs, an example, or a conversational follow-up in more depth.',
-    play: 'An unambiguous instruction to play or resume the episode.',
+    play: 'Play or resume the episode at the current or saved position, without asking to restart it.',
+    restart: 'Play the CURRENT episode from its very beginning, timestamp zero, including its opening. Start it over or replay it from the top. Not resuming, skipping the intro, restarting an explanation, a question about the beginning, or a negated restart.',
     pause: 'An unambiguous instruction to pause playback.',
     return: 'Leave the explanation or conversation and return to the podcast at the saved position.',
     'skip-ad': 'An instruction to skip the current advertisement. Not a question about advertising, a request to keep listening, or a preference to automatically skip future ads.',
@@ -81,6 +82,7 @@ export function createIntelligence(config: BackendConfig, choices: typeof askCho
       }, { ...typesafe, apiKey: typesafe.apiKey, timeoutMs: 1800, signal });
       const action = answers.action;
       if ((action.probabilities[action.choice] ?? 0) < 0.7 || action.confidence < 0.45) return { kind: 'unclear', source: 'jev' };
+      if (action.choice === 'restart') return { kind: 'seek', position: 0, source: 'jev' };
       if (action.choice === 'skip-ad' && (answers.skipTarget.choice !== 'advertisement' || (answers.skipTarget.probabilities.advertisement ?? 0) < 0.85)) return { kind: 'unclear', source: 'jev' };
       if (action.choice === 'skip-intro' && (answers.skipTarget.choice !== 'introduction' || (answers.skipTarget.probabilities.introduction ?? 0) < 0.85)) return { kind: 'unclear', source: 'jev' };
       const passage = answers.passage;

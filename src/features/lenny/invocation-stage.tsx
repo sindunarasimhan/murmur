@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, FadeIn, FadeOut, LinearTransition, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { demoEpisode } from '@/data/demo-episode';
 import { useReducedMotion } from '@/design/use-reduced-motion';
 import { AmbientPodcastRail } from '@/features/home/ambient-podcast-rail';
@@ -27,11 +27,9 @@ export function InvocationStage({ state, playbackEntered = false, seconds = 0, c
   const transition = useSharedValue(playback ? 1 : 0);
   const mascotSize = Math.min(width - 24, height * 0.44, 390);
   const compactSize = 116;
-  const [introHeight, setIntroHeight] = useState(70);
   useEffect(() => {
     transition.value = withTiming(playback ? 1 : 0, { duration: reducedMotion ? 0 : 480, easing: Easing.inOut(Easing.cubic) });
   }, [playback, reducedMotion, transition]);
-  const introStyle = useAnimatedStyle(() => ({ opacity: 1 - transition.value, height: introHeight * (1 - transition.value), overflow: 'hidden' }));
   const mascotSpace = useAnimatedStyle(() => ({ height: mascotSize + (compactSize - mascotSize) * transition.value }));
   const mascotMotion = useAnimatedStyle(() => ({ transform: [{ translateY: -(mascotSize - compactSize) / 2 * transition.value }, { scale: 1 - (1 - compactSize / mascotSize) * transition.value }] }));
   const playerStyle = useAnimatedStyle(() => ({ opacity: transition.value, transform: [{ translateY: 18 * (1 - transition.value) }] }));
@@ -51,12 +49,10 @@ export function InvocationStage({ state, playbackEntered = false, seconds = 0, c
         <View style={styles.mic}><View style={[styles.dot, { backgroundColor: state.microphone ? '#728064' : '#B8A990' }]} /><Text style={styles.micText}>{state.microphone ? 'Mic on' : 'Mic off'}</Text></View>
       </View>
       <View style={styles.stage}>
-        <Animated.View style={[{ width: '100%' }, introStyle]} accessibilityElementsHidden={playback} importantForAccessibility={playback ? 'no-hide-descendants' : 'auto'}>
-          <View onLayout={({ nativeEvent }) => setIntroHeight(nativeEvent.layout.height)}>
+        {!playback ? <Animated.View style={{ width: '100%', flexShrink: 0 }} entering={reducedMotion ? undefined : FadeIn.duration(200)} exiting={reducedMotion ? undefined : FadeOut.duration(200)}>
           <Text style={styles.title}>What would you like to hear?</Text>
-          </View>
-        </Animated.View>
-        <Animated.View style={[styles.mascot, { width: mascotSize }, mascotSpace]}><Animated.View style={mascotMotion}><MurmurMascot size={mascotSize} phase={state.speechPlaying ? 'speaking' : state.phase === 'speaking' ? 'thinking' : state.phase} level={state.speechLevel} reducedMotion={reducedMotion} /></Animated.View></Animated.View>
+        </Animated.View> : null}
+        <Animated.View layout={reducedMotion ? undefined : LinearTransition.duration(250)} style={[styles.mascot, { width: mascotSize }, mascotSpace]}><Animated.View style={mascotMotion}><MurmurMascot size={mascotSize} phase={state.speechPlaying ? 'speaking' : state.phase === 'speaking' ? 'thinking' : state.phase} level={state.speechLevel} reducedMotion={reducedMotion} /></Animated.View></Animated.View>
         <View style={styles.labelRow}><View style={[styles.dot, { backgroundColor: state.error ? '#A36648' : '#7B876C' }]} /><Text style={styles.label}>{playback && state.phase === 'playing' ? 'Playing' : playback && state.phase === 'paused' ? 'Paused' : label}</Text></View>
         {playback && state.episode ? <Animated.View style={[styles.player, playerStyle]}>
           <View style={styles.artworkFrame}>
