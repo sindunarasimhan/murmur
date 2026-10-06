@@ -161,7 +161,8 @@ export class Repository {
       const action = session.pendingAction;
       const boundedSkip = action?.kind === 'skip-ad' || action?.kind === 'skip-intro';
       const tolerance = boundedSkip ? 0.25 : 1;
-      if (!action || action.id !== input.actionId || Math.abs(action.positionSeconds - input.positionSeconds) > tolerance || boundedSkip && input.positionSeconds < action.positionSeconds - 0.05) throw stale();
+      const delta = action ? input.positionSeconds - action.positionSeconds : 0;
+      if (!action || action.id !== input.actionId || (action.kind === 'pause' ? delta < -1 : Math.abs(delta) > tolerance) || boundedSkip && delta < -0.05) throw stale();
       const result = await client.query(`UPDATE listening_sessions SET revision=revision+1,position_seconds=$2,bookmark_seconds=NULL,
         phase=$3,pending_action=NULL,updated_at=now() WHERE id=$1 RETURNING ${sessionColumns}`, [id, input.positionSeconds, action.play ? 'playing' : 'paused']);
       return sessionSchema.parse(result.rows[0]);

@@ -68,7 +68,7 @@ const api: ListeningPorts['api'] = {
 };
 const controller = new LennyVoiceController({
   uuid: randomUUID, api, changed: () => {}, followupMs: 100,
-  audio: { position: () => position, playing: () => playing, pause: () => { playing = false; }, play: () => { playing = true; },
+  audio: { position: () => position, playing: () => playing, setDucked: () => {}, pause: () => { playing = false; }, play: () => { playing = true; },
     clear: () => {}, seek: async (seconds) => { position = seconds; return position; }, load: async (_episode, seconds) => { position = seconds; } },
   speech: { stop: async () => {}, say: async (text, signal) => { await spokenBytes(text, signal); replies++; } },
   microphone: { start: async () => { if (audioInput) await transport.start(); }, stop: async () => transport.stop() },

@@ -55,7 +55,7 @@ export const captionTrackSchema = z.object({
 });
 export type CaptionTrack = z.infer<typeof captionTrackSchema>;
 export const catalogResolutionSchema = z.object({
-  kind: z.enum(['play', 'current', 'clarify', 'stop', 'home']),
+  kind: z.enum(['play', 'current', 'clarify', 'stop', 'home', 'cancel']),
   episode: episodeSchema.optional(), message: z.string(),
 });
 export type CatalogResolution = z.infer<typeof catalogResolutionSchema>;

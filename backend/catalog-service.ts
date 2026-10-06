@@ -66,6 +66,8 @@ export class CatalogService {
         return { kind: 'stop', message: 'Microphone off. See you soon.' };
       case 'home':
         return { kind: 'home', message: 'Back home. What would you like to hear?' };
+      case 'cancel':
+        return { kind: 'cancel', message: '' };
       case 'clarify':
         return clarification(episodes, intent.candidateIds);
     }

@@ -15,6 +15,7 @@ test('transcription receives bounded literal catalog vocabulary without invalid 
     },
   });
   assert.deepEqual(input?.keywords, ['Hey Murmur', 'Brian Halligan', 'Lenny’s Podcast']);
+  assert.equal(input?.delay, 'minimal');
 });
 
 function tokenRequest(

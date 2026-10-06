@@ -1,0 +1,39 @@
+{
+  "status": "not_complete",
+  "scope": "Home selection through detail commands, conversation, background recovery, and return home",
+  "software": {
+    "typecheck": "passed",
+    "lint": "passed",
+    "unitTests": { "passed": 287, "failed": 0 },
+    "backendTests": { "passed": 38, "failed": 0, "liveSkippedByDefault": 3 },
+    "iosJavaScriptExport": "passed; not a native device run",
+    "renderedPreview": "Listening, speaking, playing, error and home states inspected at phone widths; no real audio in this fixture",
+    "liveTextFlow": "Two consecutive full passes after the equivalent-route probability fix, using live backend, Jev, OpenAI speech bytes and a simulated player",
+    "liveSemanticTests": { "passed": 12, "failed": 0, "skipped": 0, "catalogContextRounds": 2 },
+    "liveQuietAudioFlow": "Full PASS from home invitation through detail commands, conversation, background/reopen and end-to-home, using generated PCM through live transcription and a simulated player; not a physical microphone or audible device playback",
+    "liveOverlappingAudioFlow": "FAILED at detail pause with both minimal and medium transcription delay; medium recognized the wake but omitted pause. Medium was reverted, preserving the existing home latency setting.",
+    "liveTextFlowCommand": "npm run eval:detail",
+    "liveSemanticCommand": "MURMUR_LIVE_SEMANTICS=1 node --env-file=.env.local --import tsx --test backend/intelligence.test.ts backend/catalog-interpreter.test.ts src/server/typesafe/client.test.ts"
+  },
+  "openGates": [
+    "Mixed podcast and command audio failed to preserve the spoken command in transcription; matching isolated command audio transcribes correctly",
+    "Physical phone speaker wake recognition and audible confirmation/action ordering are unverified",
+    "Native background playback, Lock Screen controls, and reopen are unverified",
+    "Expo native remote-control pause has no command provenance in the current JS status API; simultaneous capture teardown and system pause remains a device race risk"
+  ],
+  "verificationLimits": [
+    "Pstack is an engineering workflow, not a bundled application test suite",
+    "Independent available-model design and code reviews were used; pstack's named model families and Cursor-only review tools were unavailable",
+    "Simulator tools were unavailable on this Mac",
+    "The live flow places a simulated player inside the reviewed ad; it does not verify spoken compound timestamps",
+    "One early live run failed with a generated-speech endpoint timeout; no timeout error was treated as a pass",
+    "An earlier full-flow pass failed on repetition at resume after background controls; the equivalent current/resume destination fix was followed by two full text-flow passes"
+  ],
+  "nativeCaptureFinding": "Installed Expo iOS AudioStream starts in measurement mode and does not enable AVAudioEngine voice processing. No echo-cancellation option is exposed in its stream options. This is a candidate cause of speaker interference, not a proven diagnosis of the user's phone.",
+  "nextDecision": "A native capture experiment requires an Expo development build; do not silently replace the user's Expo Go testing setup or claim this proves the eventual speaker fix.",
+  "sources": [
+    "https://docs.expo.dev/workflow/customizing/",
+    "https://developer.apple.com/documentation/avfaudio/avaudioionode/setvoiceprocessingenabled(_:)",
+    "https://developers.openai.com/api/docs/guides/realtime-transcription"
+  ]
+}

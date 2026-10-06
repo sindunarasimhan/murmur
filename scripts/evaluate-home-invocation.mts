@@ -75,7 +75,7 @@ try {
     const controller = new LennyVoiceController({
       api, uuid: randomUUID, changed: () => {}, followupMs: 20,
       microphone: { start: async () => { if (audioInput) await transport.start(); }, stop: async () => transport.stop() },
-      audio: { position: () => position, playing: () => playing, pause: () => { playing = false; }, play: () => { playing = true; }, clear: () => {},
+      audio: { position: () => position, playing: () => playing, setDucked: () => {}, pause: () => { playing = false; }, play: () => { playing = true; }, clear: () => {},
         seek: async (value) => position = value,
         load: async (episode, value, signal) => {
           assert.equal(episode.id, expected); position = value;

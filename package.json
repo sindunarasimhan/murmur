@@ -26,6 +26,7 @@
     "test:backend": "node --import tsx --test backend/*.test.ts",
     "fixture:episode": "node scripts/build-prepared-episode.mjs",
     "eval:listening": "node --env-file-if-exists=.env.local --import tsx scripts/evaluate-listening.mts",
+    "eval:detail": "node --env-file-if-exists=.env.local --import tsx scripts/evaluate-detail-voice.mts",
     "smoke:listening": "node --import tsx scripts/smoke-listening.mts",
     "listening:dev": "./script/build_and_run.sh"
   },

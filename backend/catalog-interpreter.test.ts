@@ -4,18 +4,22 @@ import { backendConfig } from './config';
 import { createCatalogInterpreter } from './catalog-interpreter';
 import { createDatabase } from './database';
 import { Repository } from './repository';
-import { askChoices } from '../src/server/typesafe/client';
+import { askChoices, type ChoiceAnswer, type ChoiceQuestion } from '../src/server/typesafe/client';
 
 test('current-episode routing combines probability only for equivalent current and resume destinations', async () => {
   const config = backendConfig(); config.providers.typesafe.apiKey = 'test-only';
-  const interpret = createCatalogInterpreter(config.providers.typesafe, async (_state, questions) => Object.fromEntries(
-    Object.entries(questions).map(([key, question]) => {
+  const choices = async <K extends string>(_state: unknown, questions: Record<K, ChoiceQuestion>): Promise<Record<K, ChoiceAnswer>> => {
+    const answers = {} as Record<K, ChoiceAnswer>;
+    for (const key of Object.keys(questions) as K[]) {
+      const question = questions[key];
       const choice = key === 'action' ? 'resume' : Object.keys(question.criteria)[0]!;
       const probabilities = Object.fromEntries(Object.keys(question.criteria).map((option) => [option,
         key === 'action' ? ({ resume: 0.73, current: 0.11, unclear: 0.15, choose: 0.01 } as Record<string, number>)[option] ?? 0 : Number(option === choice)]));
-      return [key, { choice, confidence: 0.68, probabilities }];
-    }),
-  ));
+      answers[key] = { choice, confidence: 0.68, probabilities };
+    }
+    return answers;
+  };
+  const interpret = createCatalogInterpreter(config.providers.typesafe, choices);
   const context = { utterance: 'Pick up from there', history: [], episodes: [{ id: 'brian', title: 'Brian', showTitle: 'Lenny', guest: 'Brian', description: '' }] };
   assert.equal((await interpret({ ...context, currentEpisodeId: 'brian' }, new AbortController().signal)).kind, 'resume');
   assert.equal((await interpret(context, new AbortController().signal)).kind, 'clarify');

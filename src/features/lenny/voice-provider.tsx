@@ -74,6 +74,7 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
       audio: {
         position: () => Number.isFinite(player.currentTime) ? player.currentTime : 0,
         playing: () => player.playing,
+        setDucked: (ducked) => { player.volume = ducked ? 0.2 : 1; },
         load: async (episode, position, signal) => {
           if (!episode.audioPath) throw new Error('That episode’s audio is unavailable.');
           const uri = episode.audioPath.startsWith('https://') ? episode.audioPath : `${listeningBaseUrl()}${episode.audioPath}`;
