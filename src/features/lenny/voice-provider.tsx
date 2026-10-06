@@ -67,7 +67,7 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
       uuid: Crypto.randomUUID,
       api: listeningApi,
       changed: (next) => {
-        if (__DEV__ && diagnosticPhase !== next.phase) console.info('[murmur-voice] state', { phase: next.phase, microphone: next.microphone, error: Boolean(next.error) });
+        if (__DEV__ && diagnosticPhase !== next.phase) console.info('[murmur-voice] state', { phase: next.phase, screen: next.episode ? 'detail' : 'home', microphone: next.microphone, error: Boolean(next.error), playerPlaying: player.playing });
         diagnosticPhase = next.phase;
         if (alive) setState(next);
       },
@@ -114,7 +114,11 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
               if (__DEV__) console.info('[murmur-voice] transcript-final', { wake: wakeRequest(text) !== undefined, characters: text.length, phase: instance.state.phase });
               instance.final(text, id);
             },
-              activity: () => { if (generation === captureGeneration.current) instance.activity(); }, error: (error) => { if (generation === captureGeneration.current) void instance.fail(error); } },
+              activity: () => { if (generation === captureGeneration.current) instance.activity(); }, error: (error) => {
+                if (generation !== captureGeneration.current) return;
+                if (__DEV__) console.info('[murmur-voice] transcription-failed', { screen: instance.state.episode ? 'detail' : 'home', phase: instance.state.phase });
+                void instance.fail(error);
+              } },
           });
           transcriber.current = live;
           onStage('Connecting to the voice service…');

@@ -26,6 +26,20 @@ test('live catalog understands spoken guest spellings without substituting unava
   }
 });
 
+test('live catalog selects every available episode by its supplied title', { skip: process.env.MURMUR_LIVE_CATALOG_ALL !== '1' }, async () => {
+  const config = backendConfig();
+  const pool = createDatabase(config.databaseUrl);
+  const episodes = await new Repository(pool, config).catalog().finally(() => pool.end());
+  assert(episodes.length > 1);
+  const interpret = createCatalogInterpreter(config.providers.typesafe);
+  for (const episode of episodes) {
+    const result = await interpret({ utterance: `Please play this episode: ${episode.title}`, history: [], episodes }, new AbortController().signal);
+    assert.equal(result.kind, 'select', episode.title);
+    assert.equal(result.kind === 'select' && result.episodeId, episode.id, episode.title);
+  }
+  console.log(`Verified selection for ${episodes.length} catalog entries; this does not verify microphone or audio playback.`);
+});
+
 test('current-episode routing combines probability only for equivalent current and resume destinations', async () => {
   const config = backendConfig(); config.providers.typesafe.apiKey = 'test-only';
   const choices = async <K extends string>(_state: unknown, questions: Record<K, ChoiceQuestion>): Promise<Record<K, ChoiceAnswer>> => {
@@ -59,7 +73,18 @@ test('live catalog routing separates returning to playback from continuing a dis
   ];
   let action: unknown;
   const interpret = createCatalogInterpreter(config.providers.typesafe, async (state, questions, options) => {
-    const answers = await askChoices(state, questions, options);
+    let raw: unknown;
+    let answers;
+    try {
+      answers = await askChoices(state, questions, { ...options, fetch: async (url, init) => {
+        const response = await fetch(url, init);
+        raw = await response.clone().json();
+        return response;
+      } });
+    } catch (error) {
+      console.error('Live catalog provider validation failed', JSON.stringify(raw));
+      throw error;
+    }
     action = Object.entries(answers).find(([key]) => key === 'action')?.[1];
     return answers;
   });

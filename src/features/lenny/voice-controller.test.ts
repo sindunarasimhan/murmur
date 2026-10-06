@@ -168,7 +168,7 @@ test('a resolution error after accepted wake leaves playback paused', async () =
     await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(91);
     s.ports.api.resolve = async () => { throw new Error('Resolution unavailable'); };
     await s.controller.submit('pause');
-    assert(!s.playing); assert.equal(s.position, 91); assert(!s.mic);
+    assert(!s.playing); assert.equal(s.position, 91); assert(s.mic);
   } finally { await s.controller.dispose(); }
 });
 test('a skip interrupting an unfinished pause confirmation preserves original playing intent', async () => {
@@ -720,7 +720,7 @@ test('a detail request failure preserves capture and lets a new wake retry witho
     assert.equal(s.controller.state.error, 'Temporary decision failure');
     assert(s.controller.state.microphone); assert(!s.playing); assert.equal(s.position, 83.25);
     s.ports.api.resolve = resolve;
-    s.controller.final('Hey Murmur resume', 'retry'); await delay();
+    s.controller.final('Hey Murmur back to the podcast', 'retry'); await delay();
     assert.equal(s.controller.state.error, undefined); assert(s.playing); assert.equal(s.position, 83.25);
   } finally { await s.controller.dispose(); }
 });
@@ -734,7 +734,7 @@ test('failed selection speech never starts playback but keeps the microphone ava
     assert(!s.playing); assert(s.controller.state.microphone);
     assert.equal(s.controller.state.error, 'Speech unavailable');
     s.ports.speech.say = say;
-    s.controller.final('Hey Murmur resume', 'retry'); await delay();
+    s.controller.final('Hey Murmur back to the podcast', 'retry'); await delay();
     assert(s.playing); assert.equal(s.controller.state.error, undefined);
   } finally { await s.controller.dispose(); }
 });
@@ -968,7 +968,7 @@ test('a failed device seek is never acknowledged as a successful ad skip', async
     let acknowledgements = 0;
     s.ports.audio.seek = async () => { throw new Error('Could not seek'); };
     s.ports.api.acknowledge = async (session) => { acknowledgements++; return session; };
-    await s.controller.submit('skip ad'); assert.equal(acknowledgements, 0); assert(!s.playing); assert(!s.mic);
+    await s.controller.submit('skip ad'); assert.equal(acknowledgements, 0); assert(!s.playing); assert(s.mic);
     assert.equal(s.controller.state.phase, 'paused'); assert.match(s.controller.state.error!, /Could not seek/);
     assert.equal(s.position, 25); assert.equal(s.controller.state.episode?.id, episode.id);
     assert(!s.spoken.includes('Ad skipped. Back to Lenny.'));

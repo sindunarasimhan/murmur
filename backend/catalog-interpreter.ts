@@ -38,10 +38,10 @@ const actionQuestion: ChoiceQuestion = {
 
 const catalogMatchQuestion: ChoiceQuestion = {
   type: 'choice',
-  instructions: 'Does the content requested by `utterance` exist in `episodes`? Match a named show against showTitle, a guest against guest, and a subject against title or description. For a follow-up accepting an assistant offer in `history`, evaluate that offered content. A different named show cannot be satisfied by substituting an available show. The current episode is not evidence that the requested show exists.',
+  instructions: 'Does the content requested by spoken `utterance` exist in `episodes`? Match shows against showTitle, people against guest, and subjects against title or description. A person’s name followed by podcast or interview can request an episode featuring that guest, not a show literally named after the person. Allow unambiguous phonetic spellings or minor transcription errors in names when the catalog supports the same person; do not substitute a different person or unrelated show. For a follow-up accepting an assistant offer in `history`, evaluate that offered content. The current episode is not evidence that a different requested show exists.',
   criteria: {
-    available: 'The requested show title, guest name, or subject positively matches an available episode.',
-    unavailable: 'The listener names a different show or guest, or a subject absent from the available episodes.',
+    available: 'The intended show, guest, or subject matches an available episode, including an unambiguous spoken-name spelling variant.',
+    unavailable: 'The intended show, person, or subject is absent, not merely spelled differently by transcription.',
     unspecified: 'There is no clear request to select a particular show, guest, or subject.',
   },
 };

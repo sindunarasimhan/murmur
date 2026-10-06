@@ -36,7 +36,7 @@ export function InvocationStage({ state, playbackEntered = false, seconds = 0, c
   const playerStyle = useAnimatedStyle(() => ({ opacity: transition.value, transform: [{ translateY: 18 * (1 - transition.value) }] }));
   const transcript = captionAt(captions, seconds, Math.floor(Math.min(width - 52, 430) / (12 * fontScale)) * 2);
   const captionStatus = captionsError || !state.episode?.transcriptReady ? 'Captions unavailable' : !captions.length ? 'Loading captions…' : '';
-  const label = state.error ? 'Connection interrupted' : listening ? 'Listening' : state.phase === 'thinking' ? 'Thinking' : state.phase === 'speaking' ? state.speechPlaying ? 'Speaking' : 'Thinking' : state.phase === 'connecting' ? 'Connecting' : state.microphone ? 'Ready' : 'Mic off';
+  const label = state.error ? state.microphone ? 'Ready to retry' : 'Connection interrupted' : listening ? 'Listening' : state.phase === 'thinking' ? 'Thinking' : state.phase === 'speaking' ? state.speechPlaying ? 'Speaking' : 'Thinking' : state.phase === 'connecting' ? 'Connecting' : state.microphone ? 'Ready' : 'Mic off';
   const showReply = Boolean(state.error) || state.phase === 'speaking';
   return <View style={styles.root}>
     <StatusBar style="dark" />

@@ -11,9 +11,12 @@ const origin = process.env.MURMUR_BACKEND_URL ?? 'http://127.0.0.1:4545';
 const expo = process.env.MURMUR_EXPO_URL ?? 'http://127.0.0.1:8081';
 const audioInput = process.argv.includes('--audio');
 const overlap = process.argv.includes('--overlap');
+const waitForWake = process.argv.includes('--wait-for-wake');
+const catalogSmoke = process.argv.includes('--catalog-smoke');
 const backgroundGain = Number(process.env.MURMUR_TEST_BACKGROUND_GAIN ?? 0.3);
 const ffmpeg = process.env.FFMPEG_PATH;
 assert(!overlap || audioInput, '--overlap requires --audio');
+assert(!waitForWake || audioInput, '--wait-for-wake requires --audio');
 assert(!audioInput || ffmpeg, 'Set FFMPEG_PATH for generated-speech input.');
 assert(Number.isFinite(backgroundGain) && backgroundGain >= 0 && backgroundGain <= 2);
 const pause = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -83,14 +86,15 @@ const api: ListeningPorts['api'] = {
   acknowledge: (session, actionId, positionSeconds) => request(`/sessions/${session.id}/acknowledgements`, { revision: session.revision, audioVersion: session.audioVersion, actionId, positionSeconds }),
 };
 const controller = new LennyVoiceController({
-  api, uuid: randomUUID, followupMs: 100,
+  api, uuid: randomUUID, followupMs: 6000,
   changed: (state) => states.push({ phase: state.phase, heard: state.heard, microphone: state.microphone }),
   microphone: { start: async () => { if (audioInput) await transport.start(); }, stop: async () => transport.stop() },
   audio: { position: () => position, playing: () => playing, setDucked: (value) => { ducked = value; }, pause: () => { playing = false; }, play: () => { playing = true; },
     clear: () => { playing = false; }, seek: async (seconds) => position = seconds,
     load: async (episode, seconds, signal) => {
       loads++;
-      assert.equal(episode.id, FOCUS_EPISODE_ID); assert.equal(episode.audioVersion, FOCUS_AUDIO_SHA); position = seconds;
+      if (!catalogSmoke) { assert.equal(episode.id, FOCUS_EPISODE_ID); assert.equal(episode.audioVersion, FOCUS_AUDIO_SHA); }
+      position = seconds;
       const url = episode.audioPath!.startsWith('https:') ? episode.audioPath! : `${origin}/v2${episode.audioPath}`;
       const response = await fetch(url, { headers: { Range: 'bytes=0-1023' }, signal });
       assert.equal(response.status, 206); assert((await response.arrayBuffer()).byteLength > 0);
@@ -122,8 +126,19 @@ async function utter(label: string, text: string, expected: VoicePhase) {
   const initialResponses = responses; const initialRequests = requests;
   const transcriptStart = transcripts.length; const stateStart = states.length;
   if (audioInput) {
-    const bytes = await pcm(text);
+    const separate = waitForWake && controller.state.episode && /^Hey Murmur, /i.test(text);
+    const bytes = await pcm(separate ? text.replace(/^Hey Murmur, /i, '') : text);
+    const wakeBytes = separate ? await pcm('Hey Murmur') : undefined;
     if (overlap && playing) await feed(Buffer.alloc(48_000 * 2), true);
+    if (wakeBytes) {
+      await feed(wakeBytes, overlap); transport.commit();
+      const wakeDeadline = Date.now() + 10_000;
+      while (playing || controller.state.phase !== 'listening' || transcripts.length === transcriptStart) {
+        assert(Date.now() < wakeDeadline, `${label}: wake did not pause and enter listening; transcripts=${JSON.stringify(transcripts.slice(transcriptStart))}`);
+        await pause(25);
+      }
+      console.log(JSON.stringify({ stage: label, wakeAcceptedBeforeCommand: true, position }));
+    }
     await feed(bytes, overlap); transport.commit();
   } else {
     const id = randomUUID(); controller.partial(text, id); controller.final(text, id);
@@ -142,12 +157,33 @@ async function utter(label: string, text: string, expected: VoicePhase) {
   }
   assert(controller.state.microphone, `${label}: microphone remains active`);
   assert(states.slice(stateStart).some((state) => state.heard.trim()), `${label}: recognized input exposed to UI state`);
-  console.log(JSON.stringify({ stage: label, result: 'PASS', phase: controller.state.phase, position, playing, transcripts: transcripts.slice(transcriptStart) }));
+  console.log(JSON.stringify({ stage: label, result: 'STATE_REACHED', phase: controller.state.phase, position, playing, transcripts: transcripts.slice(transcriptStart) }));
   await pause(750);
 }
 try {
   token = (await request('/identity')).token;
   await controller.activate();
+  if (catalogSmoke) {
+    for (const [request, guest] of [
+      ['Play the Cat Woo podcast', 'Cat Wu'],
+      ['Put on the Boris Cherney interview', 'Boris Cherny'],
+      ['I want the Claire Voe episode', 'Claire Vo'],
+      ['Play Benedict Evans', 'Benedict Evans'],
+    ]) {
+      await utter(`${guest}: home wake`, 'Hey Murmur', 'followup');
+      await utter(`${guest}: selection`, request, 'playing');
+      assert.equal(controller.state.episode?.guest, guest);
+      assert(playing);
+      position = 123.375;
+      await utter(`${guest}: detail pause`, 'Hey Murmur, pause the podcast', 'paused');
+      assert(!playing); assert.equal(position, 123.375);
+      await utter(`${guest}: resume`, 'Hey Murmur, continue where we left off', 'playing');
+      assert(playing); assert.equal(position, 123.375);
+      await utter(`${guest}: end`, 'Hey Murmur, end this episode', 'followup');
+      assert(!controller.state.episode); assert(!playing); assert(controller.state.microphone);
+    }
+    console.log(JSON.stringify({ result: 'PASS', catalogSmoke, audioInput, speechBytes, assertions: 'four guests: home wake, selection, real media range, speech bytes, visible detail input, pause, exact resume, end to home' }));
+  } else {
   await utter('home wake', 'Hey Murmur', 'followup');
   await utter('home to detail', 'Play the Lenny Brian Halligan episode', 'playing');
   assert(playing); assert.equal(controller.state.episode?.id, FOCUS_EPISODE_ID);
@@ -186,7 +222,8 @@ try {
   assert.equal(position, 2310);
   await utter('end episode and return home', 'Hey Murmur, end the stream', 'followup');
   assert(!controller.state.episode); assert(!playing); assert(!ducked); assert(controller.state.microphone);
-  console.log(JSON.stringify({ result: 'PASS', input: audioInput ? 'generated PCM through live transcription' : 'injected text', overlap, backgroundGain: overlap ? backgroundGain : undefined, speechBytes, assertions: 'home invitation, selection, detail input visibility, pause, exact resume, grounded question, followup, exact return, reviewed skip, paused skip, background voice off, reopen without reload, end to home' }));
+  console.log(JSON.stringify({ result: 'PASS', input: audioInput ? 'generated PCM through live transcription' : 'injected text', overlap, waitForWake, backgroundGain: overlap ? backgroundGain : undefined, speechBytes, assertions: 'home invitation, selection, detail input visibility, pause, exact resume, grounded question, followup, exact return, reviewed skip, paused skip, background voice off, reopen without reload, end to home' }));
+  }
 } catch (error) {
   console.error(JSON.stringify({ result: 'FAIL', stage, phase: controller.state.phase, position, playing, transcripts, recentStates: states.slice(-12) }));
   throw error;

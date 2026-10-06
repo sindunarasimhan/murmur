@@ -102,6 +102,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
     (session: number, error?: Error) => {
       const completion = completionRef.current;
       if (!completion || completion.session !== session || sessionRef.current !== session) return;
+      if (__DEV__) console.info('[murmur-speech] completion', { session, started: completion.started, failed: Boolean(error) });
 
       completionRef.current = undefined;
       clearWatchdog();
@@ -180,12 +181,14 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
     if (!completion || completion.kind !== 'remote') return;
 
     if (status.playing) {
+      if (__DEV__ && !completion.started) console.info('[murmur-speech] playback-started', { session: completion.session });
       if (!completion.started) completion.onStart?.();
       completion.started = true;
       clearStartTimer();
     }
 
     if (status.error) {
+      if (__DEV__) console.info('[murmur-speech] native-playback-error', { session: completion.session });
       startDeviceSpeech(completion.session, completion.text);
     } else if (status.didJustFinish && completion.started) {
       finish(completion.session);
@@ -236,7 +239,9 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
       }
 
       try {
+        if (__DEV__) console.info('[murmur-speech] requesting', { session });
         const speech = await (loadSpeech ? loadSpeech(signal) : synthesizeSpeech(text, { signal }));
+        if (__DEV__) console.info('[murmur-speech] audio-received', { session, bytes: speech.audio.byteLength });
         if (sessionRef.current !== session || signal?.aborted) {
           throw new MurmurApiError('Assistant speech was cancelled.', {
             kind: 'cancelled',
@@ -286,6 +291,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
               completion.kind === 'remote' &&
               !completion.started
             ) {
+              if (__DEV__) console.info('[murmur-speech] start-timeout', { session, loaded: player.isLoaded, playing: player.playing });
               startDeviceSpeech(session, text);
             }
           },
@@ -294,6 +300,10 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
         player.play();
         return 'openai';
       } catch (error) {
+        if (__DEV__) console.info('[murmur-speech] request-or-setup-failed', {
+          session, cancelled: Boolean(signal?.aborted || sessionRef.current !== session),
+          status: error instanceof MurmurApiError ? error.status : undefined,
+        });
         if (
           signal?.aborted ||
           (error instanceof MurmurApiError && error.kind === 'cancelled') ||

@@ -1,7 +1,7 @@
 import type { VoicePhase, VoiceState } from './voice-controller';
 
 type DetailPresentation = {
-  voiceStatus: 'Connection interrupted' | 'Mic off' | 'Ready' | 'Connecting' | 'Listening' | 'Thinking' | 'Speaking';
+  voiceStatus: 'Connection interrupted' | 'Ready to retry' | 'Mic off' | 'Ready' | 'Connecting' | 'Listening' | 'Thinking' | 'Speaking';
   playbackStatus: 'Playing' | 'Paused' | undefined;
   heard: string;
   reply: string;
@@ -17,7 +17,7 @@ export function detailPresentation(state: VoiceState): DetailPresentation {
   const error = Boolean(state.error) || state.phase === 'error';
   const speaking = state.phase === 'speaking' && state.speechPlaying;
   return {
-    voiceStatus: error ? 'Connection interrupted' : !state.microphone ? 'Mic off' : speaking ? 'Speaking' : phaseStatus[state.phase],
+    voiceStatus: error ? state.microphone ? 'Ready to retry' : 'Connection interrupted' : !state.microphone ? 'Mic off' : speaking ? 'Speaking' : phaseStatus[state.phase],
     playbackStatus: state.phase === 'playing' ? 'Playing' : state.phase === 'paused' ? 'Paused' : undefined,
     heard: state.heard,
     reply: error ? state.error || state.caption : speaking ? state.caption : '',

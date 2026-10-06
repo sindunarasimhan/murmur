@@ -20,11 +20,18 @@ test('detail separates voice readiness from playback state', () => {
 test('detail prioritizes connection errors and microphone availability over playback', () => {
   for (const phase of ['playing', 'paused', 'listening', 'followup'] satisfies VoicePhase[]) {
     assert.equal(detailPresentation({ ...state, phase, microphone: false }).voiceStatus, 'Mic off');
-    const failed = detailPresentation({ ...state, phase, error: 'Voice disconnected', caption: 'Reconnect voice' });
+    const failed = detailPresentation({ ...state, phase, microphone: false, error: 'Voice disconnected', caption: 'Reconnect voice' });
     assert.equal(failed.voiceStatus, 'Connection interrupted');
     assert.equal(failed.reply, 'Voice disconnected');
     assert.equal(failed.error, true);
   }
+});
+
+test('recoverable request failure shows that voice is still available for retry', () => {
+  const failed = detailPresentation({ ...state, phase: 'paused', error: 'Speech unavailable' });
+  assert.equal(failed.voiceStatus, 'Ready to retry');
+  assert.equal(failed.playbackStatus, 'Paused');
+  assert.equal(failed.reply, 'Speech unavailable');
 });
 
 test('detail only displays spoken reply when audio is actually playing', () => {
