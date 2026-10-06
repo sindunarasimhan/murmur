@@ -6,6 +6,26 @@ import { createDatabase } from './database';
 import { Repository } from './repository';
 import { askChoices, type ChoiceAnswer, type ChoiceQuestion } from '../src/server/typesafe/client';
 
+test('live catalog understands spoken guest spellings without substituting unavailable shows', { skip: process.env.MURMUR_LIVE_SEMANTICS !== '1' }, async () => {
+  const config = backendConfig();
+  const pool = createDatabase(config.databaseUrl);
+  const episodes = await new Repository(pool, config).catalog().finally(() => pool.end());
+  const interpret = createCatalogInterpreter(config.providers.typesafe);
+  for (const [utterance, guest] of [
+    ['Play the Cat Woo podcast', 'Cat Wu'],
+    ['Put on the Boris Cherney interview', 'Boris Cherny'],
+    ['I want the Claire Voe episode', 'Claire Vo'],
+    ['Play the Lex Fridman podcast', undefined],
+    ['Play Planet Money instead', undefined],
+  ] as const) {
+    const result = await interpret({ utterance, history: [], episodes }, new AbortController().signal);
+    if (guest) {
+      assert.equal(result.kind, 'select', utterance);
+      assert.equal(result.kind === 'select' && episodes.find((episode) => episode.id === result.episodeId)?.guest, guest, utterance);
+    } else assert.equal(result.kind, 'clarify', utterance);
+  }
+});
+
 test('current-episode routing combines probability only for equivalent current and resume destinations', async () => {
   const config = backendConfig(); config.providers.typesafe.apiKey = 'test-only';
   const choices = async <K extends string>(_state: unknown, questions: Record<K, ChoiceQuestion>): Promise<Record<K, ChoiceAnswer>> => {
