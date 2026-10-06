@@ -3,7 +3,7 @@ import { isRecord, readUpstreamJson, requestUpstream, UpstreamError } from '../h
 import { REALTIME_SAMPLE_RATE, type RealtimeSurface, type RealtimeTokenResponse } from './contracts';
 
 export async function createTranscriptionSession(surface: RealtimeSurface, options: {
-  apiKey: string; model: string; fetch?: typeof fetch; signal: AbortSignal;
+  apiKey: string; model: string; fetch?: typeof fetch; signal: AbortSignal; keywords?: string[];
 }): Promise<RealtimeTokenResponse> {
   return requestUpstream('https://api.openai.com/v1/realtime/client_secrets', {
     method: 'POST',
@@ -16,6 +16,7 @@ export async function createTranscriptionSession(surface: RealtimeSurface, optio
           noise_reduction: { type: 'near_field' },
           transcription: {
             model: options.model, delay: 'minimal', languages: ['en'],
+            keywords: [...new Set(['Hey Murmur', ...(options.keywords ?? [])].filter((word) => word.trim() && word.length <= 120 && !/[<>\r\n]/.test(word)).map((word) => word.trim()))].slice(0, 128),
             prompt: surface === 'episode'
               ? 'A listener controlling a podcast or asking a question about the current episode. Transcribe the wake phrase Hey Murmur exactly when spoken. Common requests include skip ad, pause, play, go back, and explain that.'
               : 'A listener choosing a podcast episode by speaking its title, show name, host, or topic.',

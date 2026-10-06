@@ -2,6 +2,7 @@ import type { CatalogResolution, ListeningSession, Observation, PreparedEpisode,
 
 export type VoicePhase = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'followup' | 'playing' | 'paused' | 'error';
 type Engagement = 'wake-required' | 'catalog-dialogue' | 'episode-dialogue';
+type Utterance = { kind: 'pending'; epoch: number; order: number; finalText?: string } | { kind: 'ambient' } | { kind: 'consumed' };
 export type VoiceState = { phase: VoicePhase; microphone: boolean; speechPlaying?: boolean; speechLevel?: number; episode?: PreparedEpisode; caption: string; heard: string; error?: string };
 export type ListeningPorts = {
   uuid(): string;
@@ -38,7 +39,10 @@ export class LennyVoiceController {
   private queue: Promise<unknown> = Promise.resolve();
   private item?: string;
   private wakeItem?: string;
-  private itemModes = new Map<string, boolean>();
+  private utterances = new Map<string, Utterance>();
+  private utteranceOrder = 0;
+  private displayedOrder = 0;
+  private recentSpeech?: { text: string; expires: number };
   private history: string[] = [];
   private disposed = false;
   private awaitingFinal = false;
@@ -105,7 +109,7 @@ export class LennyVoiceController {
       // Capture adapters release their own cancelled generation. Stopping here
       // would shut down a newer activation after a late permission response.
       if (!this.current(epoch)) return;
-      this.itemModes.clear(); this.item = undefined;
+      this.resetUtterances();
       if (this.state.episode) {
         this.resumeAfterConversation = this.ports.audio.playing();
         this.needsPlaybackSync = true;
@@ -116,60 +120,112 @@ export class LennyVoiceController {
       }
     } catch (error) { await this.fail(error, epoch); }
   }
-  partial(text: string, item: string) {
+  private resetUtterances() {
+    for (const id of this.utterances.keys()) this.utterances.set(id, { kind: 'consumed' });
+    this.item = undefined; this.wakeItem = undefined; this.recentSpeech = undefined;
+  }
+  private recordUtterance(id: string, value: Utterance) {
+    this.utterances.set(id, value);
+    if (this.utterances.size > 64) this.utterances.delete(this.utterances.keys().next().value!);
+  }
+  private finishInput() {
+    this.awaitingFinal = false;
+    clearTimeout(this.speakingDeadline); this.speakingDeadline = undefined;
+  }
+  private receive(text: string, item: string, final: boolean): string | undefined {
     if (!this.state.microphone || this.disposed) return;
+    const known = this.utterances.get(item);
+    if (known?.kind === 'consumed') return;
+    if (!text.trim()) {
+      if (final) {
+        this.recordUtterance(item, { kind: 'consumed' });
+        if (!this.item || this.item === item) { this.item = undefined; this.finishInput(); this.armSilence(this.epoch); }
+      }
+      return;
+    }
+    const normalized = (value: string) => value.toLocaleLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+    const echo = this.recentSpeech && Date.now() <= this.recentSpeech.expires && normalized(text) === normalized(this.recentSpeech.text);
+    if (echo) {
+      if (final) {
+        this.recordUtterance(item, { kind: 'consumed' });
+        if (!this.item || this.item === item) { this.item = undefined; this.finishInput(); this.armSilence(this.epoch); }
+      }
+      return;
+    }
     const wake = wakeRequest(text);
+    if (known?.kind === 'pending' && known.epoch !== this.epoch) {
+      this.recordUtterance(item, { kind: 'consumed' }); return;
+    }
     if (this.inviting && this.state.phase === 'thinking' && wake === undefined && text.trim()) {
       this.inviting = false;
       this.next();
       this.update({ phase: 'listening' });
     }
     if (wake !== undefined && this.wakeItem !== item) {
-      this.wakeItem = item; this.item = item; this.itemModes.set(item, true);
+      this.wakeItem = item; this.item = item;
       const epoch = this.next();
+      this.recordUtterance(item, { kind: 'pending', epoch, order: ++this.utteranceOrder });
       if (this.state.episode) this.engagement = 'episode-dialogue';
       this.ports.audio.pause();
-      this.update({ phase: 'listening', caption: 'I’m listening.', heard: wake, error: undefined });
+      this.update({ phase: 'listening', caption: 'I’m listening.', heard: text.slice(-1000), error: undefined });
       void this.ports.speech.stop();
       void this.observe('interrupt', epoch).catch((error) => this.fail(error, epoch));
       this.armSilence(epoch);
     }
-    if (!this.itemModes.has(item)) this.itemModes.set(item, ['listening', 'followup'].includes(this.state.phase));
-    if (this.itemModes.size > 64) this.itemModes.delete(this.itemModes.keys().next().value!);
-    if (!this.itemModes.get(item) || !['listening', 'followup'].includes(this.state.phase)) return;
+    if (!this.utterances.has(item)) this.recordUtterance(item,
+      ['listening', 'followup', 'speaking'].includes(this.state.phase) ? { kind: 'pending', epoch: this.epoch, order: ++this.utteranceOrder } : { kind: 'ambient' });
+    const utterance = this.utterances.get(item);
+    if (utterance?.kind === 'pending' && this.state.phase === 'speaking' && final) {
+      this.recordUtterance(item, { ...utterance, finalText: text }); return;
+    }
+    if (utterance?.kind !== 'pending' || utterance.order < this.displayedOrder || !['listening', 'followup'].includes(this.state.phase)) {
+      if (final) this.recordUtterance(item, { kind: 'consumed' });
+      return;
+    }
     this.item = item;
-    this.update({ phase: 'listening', heard: (wake ?? text).slice(-1000) });
-    this.armSilence(this.epoch);
+    this.displayedOrder = utterance.order;
+    this.update({ phase: 'listening', heard: text.slice(-1000) });
+    if (final) this.armSilence(this.epoch);
+    else this.activity();
+    if (final) { this.recordUtterance(item, { kind: 'consumed' }); this.item = undefined; this.finishInput(); }
+    return wake ?? text.trim();
+  }
+  partial(text: string, item: string) {
+    this.receive(text, item, false);
+  }
+  private followup(caption: string, epoch: number) {
+    this.update({ phase: 'followup', caption });
+    this.armSilence(epoch);
+    const pending = [...this.utterances.entries()].reverse().find(([, value]) => value.kind === 'pending' && value.epoch === epoch);
+    if (pending?.[1].kind === 'pending' && pending[1].finalText) this.final(pending[1].finalText, pending[0]);
   }
   final(text: string, item: string) {
     if (!this.state.microphone || this.disposed) return;
+    if (this.utterances.get(item)?.kind === 'consumed') return;
     if (/^(?:hey[ ,]+murmur[ ,.!?]*)?(?:please )?(?:stop listening|turn off (?:the )?(?:microphone|mic))[.!?]*$/i.test(text.trim())) {
-      this.itemModes.set(item, false); void this.shutdown(true); return;
+      this.recordUtterance(item, { kind: 'consumed' }); void this.shutdown(true); return;
     }
-    if (!this.itemModes.has(item) || wakeRequest(text) !== undefined) this.partial(text, item);
-    if (!this.itemModes.get(item) || this.item !== item || !['listening', 'followup'].includes(this.state.phase)) return;
-    this.itemModes.set(item, false); this.item = undefined; this.awaitingFinal = false;
-    const request = wakeRequest(text) ?? text.trim();
+    const request = this.receive(text, item, true);
+    if (request === undefined) return;
     if (!request) {
       if (!this.state.episode) void this.invite();
       else this.armSilence(this.epoch);
       return;
     }
-    void this.submit(request.slice(0, 1000));
+    void this.submit(request.slice(0, 1000), false, text.slice(-1000));
   }
   private async invite() {
     const epoch = this.next();
     this.inviting = true;
     this.engagement = 'catalog-dialogue';
-    this.update({ phase: 'thinking', heard: '', caption: '' });
+    this.update({ phase: 'thinking', caption: '' });
     try {
       const message = await this.ports.api.invite(this.history, this.abort.signal);
       if (!this.current(epoch)) return;
       this.remember('Hey Murmur', message);
       await this.say(message, epoch);
       if (!this.current(epoch)) return;
-      this.update({ phase: 'followup', caption: 'Listening', heard: '' });
-      this.armSilence(epoch);
+      this.followup('Listening', epoch);
     } catch (error) { await this.fail(error, epoch); }
     finally { if (this.current(epoch)) this.inviting = false; }
   }
@@ -202,13 +258,16 @@ export class LennyVoiceController {
   }
   private async say(text: string, epoch: number, turn?: TurnResult) {
     if (!this.current(epoch)) return;
+    const reference = { text, expires: Number.POSITIVE_INFINITY };
+    this.recentSpeech = reference;
     this.update({ phase: 'speaking', speechPlaying: false, caption: text });
-    await this.ports.speech.say(text, this.abort.signal, turn);
+    try { await this.ports.speech.say(text, this.abort.signal, turn); }
+    finally { reference.expires = Date.now() + 12_000; }
   }
-  async submit(text: string, returning = false) {
+  async submit(text: string, returning = false, display = text) {
     if (this.background || this.disposed) return;
     const epoch = this.next();
-    this.update({ phase: 'thinking', heard: text, caption: 'Following your thought…', error: undefined });
+    this.update({ phase: 'thinking', heard: display, caption: 'Following your thought…', error: undefined });
     this.ports.audio.pause(); await this.ports.speech.stop();
     if (!this.current(epoch)) return;
     try {
@@ -296,7 +355,7 @@ export class LennyVoiceController {
       }
       if (!this.current(epoch)) return;
       this.awaitingFinal = false;
-      this.update({ phase: 'followup', caption: 'Anything else?', heard: '' }); this.armSilence(epoch);
+      this.followup('Anything else?', epoch);
     } catch (error) { await this.fail(error, epoch); }
   }
   async progress() {
@@ -335,7 +394,7 @@ export class LennyVoiceController {
     const epoch = this.next();
     this.needsPlaybackSync = true;
     this.engagement = 'wake-required';
-    this.item = undefined; this.wakeItem = undefined; this.itemModes.clear();
+    this.resetUtterances();
     this.update({ microphone: false, heard: '', phase: this.state.episode ? this.ports.audio.playing() ? 'playing' : 'paused' : 'idle', caption: '' });
     await Promise.all([this.ports.microphone.stop(), this.ports.speech.stop()]);
     if (!this.current(epoch)) return;
@@ -350,7 +409,7 @@ export class LennyVoiceController {
     if (!this.current(epoch)) return;
     await this.observe('cancel', epoch).catch(() => undefined);
     if (!this.current(epoch)) return;
-    this.ports.audio.clear(); this.session = undefined; this.item = undefined; this.itemModes.clear();
+    this.ports.audio.clear(); this.session = undefined; this.resetUtterances();
     this.resumeAfterConversation = false;
     this.update({ episode: undefined, heard: '', caption: 'Microphone off. Your place is saved. Reopen Murmur to listen again.' });
     if (announce) {

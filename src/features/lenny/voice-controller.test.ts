@@ -203,6 +203,17 @@ test('wake transcript remains readable through generated invitation and followup
     assert.equal(s.controller.state.phase, 'followup');
   } finally { await s.controller.dispose(); }
 });
+test('wake partial keeps listening until the delayed final transcript arrives', async () => {
+  const s = setup(10);
+  try {
+    await s.controller.activate(); await delay(20);
+    s.controller.partial('Hey Murmur', 'wake'); await delay(25);
+    assert.equal(s.controller.state.phase, 'listening');
+    s.controller.final('Hey Murmur,', 'wake'); await delay();
+    assert.equal(s.controller.state.phase, 'followup'); assert.equal(s.spoken.length, 1);
+    assert.equal(s.controller.state.heard, 'Hey Murmur,');
+  } finally { await s.controller.dispose(); }
+});
 test('empty transcription does not erase text or trigger another invitation', async () => {
   const s = setup(); let invitations = 0;
   s.ports.api.invite = async () => { invitations++; return 'Which podcast would you like?'; };
@@ -235,6 +246,93 @@ test('late transcript of the invitation itself is not treated as a listener requ
     await s.controller.activate(); s.controller.final('Hey Murmur', 'wake'); await delay();
     s.controller.final('Which podcast shall we listen to?', 'speaker-echo'); await delay();
     assert.equal(requests, 0); assert.equal(s.controller.state.phase, 'followup');
+  } finally { await s.controller.dispose(); }
+});
+for (const finishBeforeSpeech of [true, false]) {
+  test(`selection across actual speech callbacks is dispatched once (final before completion: ${finishBeforeSpeech})`, async () => {
+    const s = setup(); let finish!: () => void; let requests = 0;
+    const say = s.ports.speech.say; const resolve = s.ports.api.resolve;
+    s.ports.api.resolve = async (...args) => { requests++; return resolve(...args); };
+    s.ports.speech.say = async (...args) => {
+      await say(...args); s.controller.speechActivity(true);
+      await new Promise<void>((done) => { finish = done; });
+      s.controller.speechActivity(false);
+    };
+    try {
+      await s.controller.activate(); s.controller.final('Hey Murmur', 'wake'); await delay();
+      assert(s.controller.state.speechPlaying);
+      s.controller.partial('play', 'selection'); s.controller.partial('play Lenny', 'selection');
+      if (finishBeforeSpeech) s.controller.final('play Lenny', 'selection');
+      s.ports.speech.say = say; finish(); await delay();
+      if (!finishBeforeSpeech) s.controller.final('play Lenny', 'selection');
+      await delay(); s.controller.final('play Lenny', 'selection'); await delay();
+      assert(s.playing); assert.equal(requests, 1);
+    } finally { await s.controller.dispose(); }
+  });
+}
+test('empty final after activity releases its deadline without closing voice', async (t) => {
+  const s = setup();
+  try {
+    await s.controller.activate(); s.controller.final('Hey Murmur', 'wake'); await delay();
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    s.controller.activity(); s.controller.final('', 'silence');
+    t.mock.timers.tick(25_000); t.mock.timers.reset(); await delay();
+    assert(s.mic); assert.equal(s.controller.state.phase, 'followup'); assert.equal(s.controller.state.error, undefined);
+  } finally { t.mock.timers.reset(); await s.controller.dispose(); }
+});
+test('newer unfinished reply supersedes a queued final during the greeting', async () => {
+  const s = setup(); let finish!: () => void; const requests: string[] = [];
+  const say = s.ports.speech.say; const resolve = s.ports.api.resolve;
+  s.ports.api.resolve = async (...args) => { requests.push(args[0]); return resolve(...args); };
+  s.ports.speech.say = () => new Promise<void>((done) => { finish = done; });
+  try {
+    await s.controller.activate(); s.controller.final('Hey Murmur', 'wake'); await delay();
+    s.controller.final('old choice', 'old'); s.controller.partial('play', 'new');
+    s.ports.speech.say = say; finish(); await delay();
+    assert.deepEqual(requests, []);
+    s.controller.final('play Lenny', 'new'); await delay();
+    assert.deepEqual(requests, ['play Lenny']); assert(s.playing);
+  } finally { await s.controller.dispose(); }
+});
+test('an older final cannot replace or dispatch newer recognized words', async () => {
+  const s = setup(); let requests = 0; const resolve = s.ports.api.resolve;
+  s.ports.api.resolve = async (...args) => { requests++; return resolve(...args); };
+  try {
+    await s.controller.activate();
+    s.controller.partial('old choice', 'old'); s.controller.partial('play Lenny', 'new');
+    s.controller.final('old choice', 'old'); await delay();
+    assert.equal(s.controller.state.heard, 'play Lenny'); assert.equal(requests, 0);
+    s.controller.final('play Lenny', 'new'); await delay(); assert(s.playing); assert.equal(requests, 1);
+  } finally { await s.controller.dispose(); }
+});
+test('duplicate wake stays consumed after another item arrives', async () => {
+  const s = setup(); let invitations = 0;
+  s.ports.api.invite = async () => { invitations++; return 'Which episode would you like?'; };
+  try {
+    await s.controller.activate(); s.controller.final('Hey Murmur', 'wake'); await delay();
+    s.controller.partial('play', 'selection'); s.controller.final('Hey Murmur', 'wake'); await delay();
+    assert.equal(invitations, 1); assert.equal(s.controller.state.heard, 'play');
+  } finally { await s.controller.dispose(); }
+});
+test('echo normalization does not become a phrase gate for a real question', async () => {
+  const s = setup(); const requests: string[] = [];
+  s.ports.api.resolve = async (text) => { requests.push(text); return { kind: 'clarify', message: 'You can choose a guest.' }; };
+  try {
+    await s.controller.activate(); s.controller.final('Hey Murmur', 'wake'); await delay();
+    s.controller.final('WHICH PODCAST SHALL WE LISTEN TO', 'echo'); await delay();
+    assert.equal(requests.length, 0);
+    s.controller.final('Which podcast has Benedict Evans?', 'question'); await delay();
+    assert.deepEqual(requests, ['Which podcast has Benedict Evans?']);
+    assert.equal(s.controller.state.heard, 'Which podcast has Benedict Evans?');
+  } finally { await s.controller.dispose(); }
+});
+test('wake plus request stays visible while generated confirmation is speaking', async () => {
+  const s = setup(); let finish!: () => void;
+  s.ports.speech.say = () => new Promise<void>((resolve) => { finish = resolve; });
+  try {
+    await s.controller.activate(); s.controller.final('Hey Murmur, play Lenny', 'combined'); await delay();
+    assert.equal(s.controller.state.phase, 'speaking'); assert.equal(s.controller.state.heard, 'Hey Murmur, play Lenny');
+    finish(); await delay(); assert(s.playing); assert.equal(s.controller.state.heard, '');
   } finally { await s.controller.dispose(); }
 });
 test('a corrected final wake transcript interrupts playback even when its partial was ignored', async () => {
@@ -350,7 +448,7 @@ test('idle invocation retains wake monitoring and reactivates without a button',
     assert.equal(s.controller.state.phase, 'idle');
     s.controller.partial('Hey Murmur, play', 'wake');
     assert.equal(s.controller.state.phase, 'listening');
-    assert.equal(s.controller.state.heard, 'play');
+    assert.equal(s.controller.state.heard, 'Hey Murmur, play');
     s.controller.final('Hey Murmur, play Lenny', 'wake'); await delay();
     assert(s.playing); assert.equal(s.controller.state.episode?.id, episode.id);
   } finally { await s.controller.dispose(); }

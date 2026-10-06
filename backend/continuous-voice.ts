@@ -88,7 +88,11 @@ export class ContinuousVoiceGateway {
         this.cancel(owner); this.sockets.set(owner, socket);
         const openai = this.config.providers.openai;
         if (!openai.apiKey) return fail('Voice is not configured.');
-        const credential = await createTranscriptionSession('episode', { apiKey: openai.apiKey, model: openai.realtimeModel, signal: controller.signal });
+        const catalog = await this.repository.catalog();
+        const credential = await createTranscriptionSession('episode', {
+          apiKey: openai.apiKey, model: openai.realtimeModel, signal: controller.signal,
+          keywords: catalog.flatMap(({ showTitle, guest }) => guest ? [showTitle, guest] : [showTitle]),
+        });
         if (closed) return;
         upstream = new WebSocket('wss://api.openai.com/v1/realtime', { headers: { Authorization: `Bearer ${credential.clientSecret}` }, handshakeTimeout: 8000, maxPayload: 256 * 1024 });
         upstream.on('open', () => {

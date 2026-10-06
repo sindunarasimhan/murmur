@@ -26,7 +26,7 @@ Implemented, not device-accepted:
 
 Verification: typecheck and lint passed; 239 app tests and 35 backend tests passed; 50 controller/lifecycle/audio-handoff tests passed on each of five repetitions; iOS JavaScript export passed. Existing development server and backend health checks passed. These are software checks, not a physical microphone, speaker, or iOS system-control test.
 
-Device acceptance still required on a rebuilt, signed Expo app (native plugin settings are not delivered by a JavaScript reload):
+Device acceptance is still required. Test the existing Expo Go app first; Expo Go includes audio support and its iOS host declares background audio. A separate signed build is not a prerequisite for this first check. A JavaScript reload cannot change the host's native configuration, so the eventual standalone app still needs its own build verification:
 
 1. Play an episode, leave for the Home Screen, then lock the phone. Confirm uninterrupted audible playback and no microphone use.
 2. Verify title/artwork and play, pause, seek forward/back in Lock Screen / Control Center. Leave audio playing for several minutes.
@@ -35,4 +35,4 @@ Device acceptance still required on a rebuilt, signed Expo app (native plugin se
 5. Background during an answer and during voice startup. Confirm no delayed speech or capture; repeat rapid app switches.
 6. Test speaker, headphones, disconnecting headphones, and unavailable voice service. Confirm a voice failure does not clear playback.
 
-No signed installable phone build was produced in this task. Signing/account setup is not established in the project; the existing Expo Go installation cannot validate newly generated native configuration. Persistent recovery after force-quit, a Home Screen widget, background voice questions, and best-effort unknown-ad detection are outside this change.
+No signed installable phone build was produced in this task. Signing/account setup is not established in the project. Expo Go tests the behavior of its existing host, not newly generated standalone native configuration. Persistent recovery after force-quit, a Home Screen widget, background voice questions, and best-effort unknown-ad detection are outside this change.

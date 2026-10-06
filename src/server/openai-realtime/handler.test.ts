@@ -2,6 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { handleRealtimeTokenRequest } from '@/server/openai-realtime/handler';
+import { createTranscriptionSession } from './provider';
+
+test('transcription receives bounded literal catalog vocabulary without invalid keywords', async () => {
+  let input: Record<string, unknown> | undefined;
+  await createTranscriptionSession('episode', {
+    apiKey: 'test', model: 'gpt-live-transcribe', signal: new AbortController().signal,
+    keywords: ['Brian Halligan', 'Lenny’s Podcast', 'Brian Halligan', '', 'bad\nkeyword', '<invalid>'],
+    fetch: async (_url, init) => {
+      input = JSON.parse(String(init?.body)).session.audio.input.transcription;
+      return Response.json({ value: 'ek_fixture', expires_at: Math.floor(Date.now() / 1000) + 600 });
+    },
+  });
+  assert.deepEqual(input?.keywords, ['Hey Murmur', 'Brian Halligan', 'Lenny’s Podcast']);
+});
 
 function tokenRequest(
   surface: 'discovery' | 'episode' = 'discovery',
