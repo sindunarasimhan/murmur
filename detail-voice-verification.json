@@ -5,7 +5,7 @@
   "software": {
     "typecheck": "passed",
     "lint": "passed",
-    "unitTests": { "passed": 300, "failed": 0 },
+    "unitTests": { "passed": 303, "failed": 0 },
     "backendTests": { "passed": 38, "failed": 0, "liveSkippedByDefault": 5 },
     "iosJavaScriptExport": "passed; not a native device run",
     "renderedPreview": "Listening, speaking, playing, error and home states inspected at phone widths; no real audio in this fixture",
@@ -20,6 +20,7 @@
     "requestRecovery": "Red-to-green tests prove greeting, selection speech and detail request failures keep capture available, leave playback paused and accept a new wake. Fatal microphone failures still stop capture. UI distinguishes Ready to retry from a disconnected microphone.",
     "catalogAudioFlow": "FAILED at Boris Cherny end-to-home: end this episode transcribed as And this episode and clarified. Cat Wu completed the full sequence; Boris passed selection, pause and exact resume. Quiet generated PCM, simulated player, not a phone test.",
     "allCatalogSelection": "All 50 available catalog entries selected correctly by supplied title in a live Jev test; this is selection coverage, not playback or microphone coverage",
+    "nativeSpeechHandoff": "Phone log confirms confirmation bytes loaded but native playback never started before timeout. Shared speech now waits for native source readiness before play; cancellation tests pass. This is a candidate repair requiring device verification, not a confirmed root-cause fix. System media controls now register after actual podcast playback instead of during loading.",
     "liveTextFlowCommand": "npm run eval:detail",
     "liveSemanticCommand": "MURMUR_LIVE_SEMANTICS=1 node --env-file=.env.local --import tsx --test backend/intelligence.test.ts backend/catalog-interpreter.test.ts src/server/typesafe/client.test.ts"
   },

@@ -79,9 +79,6 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
           if (!episode.audioPath) throw new Error('That episode’s audio is unavailable.');
           const uri = episode.audioPath.startsWith('https://') ? episode.audioPath : `${listeningBaseUrl()}${episode.audioPath}`;
           await loadEpisodeAudio(player, { uri, name: episode.title }, position, signal, () => Boolean(statusRef.current.error));
-          if (!signal.aborted && process.env.EXPO_OS !== 'web') player.setActiveForLockScreen(true, {
-            title: episode.title, artist: episode.showTitle, artworkUrl: episode.artworkUrl ?? undefined,
-          }, { showSeekBackward: true, showSeekForward: true });
         },
         play: () => { player.play(); }, pause: () => { player.pause(); },
         seek: async (seconds) => { await player.seekTo(seconds, 0, 0); return player.currentTime; },
@@ -170,7 +167,12 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
     void listeningApi.catalog(fetchController.signal).then((episodes) => { if (alive) { setCount(episodes.length); setFeatured(episodes.length === 1 ? episodes[0] : undefined); } }).catch(() => undefined);
     return () => { alive = false; fetchController.abort(); foreground.remove(); clearInterval(progress); clearInterval(inputHealth); void lifecycle.dispose(); };
   }, [onBuffer, player]);
-  useEffect(() => { controller.current?.playbackChanged(status.playing); }, [status.playing]);
+  useEffect(() => {
+    controller.current?.playbackChanged(status.playing);
+    if (status.playing && state.episode && process.env.EXPO_OS !== 'web') player.setActiveForLockScreen(true, {
+      title: state.episode.title, artist: state.episode.showTitle, artworkUrl: state.episode.artworkUrl ?? undefined,
+    }, { showSeekBackward: true, showSeekForward: true });
+  }, [player, state.episode, status.playing]);
   useEffect(() => { if (status.didJustFinish) void controller.current?.ended(); }, [status.didJustFinish]);
   useEffect(() => {
     if (status.error && state.episode) void controller.current?.fail(new Error('The podcast audio stopped unexpectedly. Your place is saved.'));

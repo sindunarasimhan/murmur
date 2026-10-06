@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import { PLAYBACK_AUDIO_MODE } from '@/features/listening/audio-mode';
 import { speechEnergy } from './speech-energy';
+import { startPreparedSpeech } from './start-prepared-speech';
 import {
   MurmurApiError,
   synthesizeSpeech,
@@ -297,7 +298,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
           },
           process.env.EXPO_OS === 'web' ? 1_800 : 3_500,
         );
-        player.play();
+        await startPreparedSpeech(player, () => sessionRef.current === session && completionRef.current?.session === session && !signal?.aborted);
         return 'openai';
       } catch (error) {
         if (__DEV__) console.info('[murmur-speech] request-or-setup-failed', {
