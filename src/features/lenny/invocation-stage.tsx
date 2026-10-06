@@ -1,8 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
-import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { Easing, FadeIn, FadeOut, LinearTransition, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { demoEpisode } from '@/data/demo-episode';
@@ -16,18 +16,19 @@ import { detailPresentation } from './detail-presentation';
 
 const backgroundEpisodes = [demoEpisode];
 
-type Props = { state: VoiceState; playbackEntered?: boolean; seconds?: number; captions?: readonly PlaybackCaption[]; captionsError?: string };
+type Props = { state: VoiceState; playbackEntered?: boolean; seconds?: number; captions?: readonly PlaybackCaption[]; captionsError?: string; onTalk?: () => void };
 
-export function InvocationStage({ state, playbackEntered = false, seconds = 0, captions = [], captionsError }: Props) {
+export function InvocationStage({ state, playbackEntered = false, seconds = 0, captions = [], captionsError, onTalk }: Props) {
+  const [tapCount, setTapCount] = useState(0);
   const insets = useSafeAreaInsets();
   const { width, height, fontScale } = useWindowDimensions();
   const reducedMotion = useReducedMotion();
-  const listening = state.microphone && (state.phase === 'listening' || state.phase === 'followup' || Boolean(state.followupOpen));
+  const listening = state.microphone && (state.phase === 'listening' || state.phase === 'followup');
   const playback = Boolean(state.episode && playbackEntered);
   const detail = detailPresentation(state);
   const transition = useSharedValue(playback ? 1 : 0);
   const mascotSize = Math.min(width - 24, height * 0.44, 390);
-  const compactSize = 116;
+  const compactSize = Math.min(width - 72, height * 0.31, 280);
   useEffect(() => {
     transition.value = withTiming(playback ? 1 : 0, { duration: reducedMotion ? 0 : 480, easing: Easing.inOut(Easing.cubic) });
   }, [playback, reducedMotion, transition]);
@@ -53,12 +54,6 @@ export function InvocationStage({ state, playbackEntered = false, seconds = 0, c
         {!playback ? <Animated.View style={{ width: '100%', flexShrink: 0 }} entering={reducedMotion ? undefined : FadeIn.duration(200)} exiting={reducedMotion ? undefined : FadeOut.duration(200)}>
           <Text style={styles.title}>What would you like to hear?</Text>
         </Animated.View> : null}
-        <Animated.View layout={reducedMotion ? undefined : LinearTransition.duration(250)} style={[styles.mascot, { width: mascotSize }, mascotSpace]}><Animated.View style={mascotMotion}><MurmurMascot size={mascotSize} phase={state.speechPlaying ? 'speaking' : listening ? 'listening' : state.phase === 'speaking' ? 'thinking' : state.phase} level={state.speechLevel} reducedMotion={reducedMotion} /></Animated.View></Animated.View>
-        {playback ? <View testID="detail-voice" style={styles.detailVoice}>
-          <View style={styles.labelRow}><View style={[styles.dot, { backgroundColor: detail.error ? '#A36648' : state.microphone ? '#7B876C' : '#B8A990' }]} /><Text testID="detail-voice-status" accessibilityLabel={`Voice: ${detail.voiceStatus}`} style={styles.label}>{detail.voiceStatus}</Text></View>
-          {detail.heard ? <Text testID="detail-heard" selectable numberOfLines={2} accessibilityLabel={`You said: ${detail.heard}`} style={[styles.transcript, styles.playbackHeard]}>“{detail.heard}”</Text> : null}
-          {detail.reply ? <Text testID="detail-reply" selectable numberOfLines={2} accessibilityLiveRegion="polite" accessibilityRole={detail.error ? 'alert' : 'text'} style={[styles.caption, detail.error && styles.error]}>{detail.reply}</Text> : null}
-        </View> : <View style={styles.labelRow}><View style={[styles.dot, { backgroundColor: state.error ? '#A36648' : '#7B876C' }]} /><Text style={styles.label}>{label}</Text></View>}
         {playback && state.episode ? <Animated.View testID="detail-player" style={[styles.player, playerStyle]}>
           <View style={styles.artworkFrame}>
             {state.episode.artworkUrl ? <Image source={{ uri: state.episode.artworkUrl }} style={styles.artwork} contentFit="cover" accessibilityLabel={`${state.episode.showTitle} artwork`} /> : <View style={[styles.artwork, styles.artworkFallback]}><Text style={styles.brand}>{state.episode.showTitle}</Text></View>}
@@ -66,10 +61,16 @@ export function InvocationStage({ state, playbackEntered = false, seconds = 0, c
           <Text selectable accessibilityLabel={`${state.episode.guest}. ${state.episode.title}`} style={styles.episodeGuest}>{state.episode.guest}</Text>
           <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${Math.max(0, Math.min(100, seconds / Math.max(1, state.episode.durationSeconds) * 100))}%` }]} /></View>
           <Text testID="detail-playback-status" style={styles.time}>{detail.playbackStatus ? `${detail.playbackStatus} · ` : ''}{formatDuration(seconds)} / {formatDuration(state.episode.durationSeconds)}</Text>
-          {state.phase === 'playing' || state.phase === 'paused' ? <View style={styles.episodeTranscript}>
-            <Text selectable numberOfLines={2} style={styles.currentLine}>{transcript || captionStatus || ' '}</Text>
-          </View> : null}
+          <View style={styles.episodeTranscript}>
+            {state.phase === 'playing' || state.phase === 'paused' ? <Text selectable numberOfLines={2} style={styles.currentLine}>{transcript || captionStatus || ' '}</Text> : null}
+          </View>
         </Animated.View> : null}
+        <Animated.View layout={reducedMotion ? undefined : LinearTransition.duration(250)} style={[styles.mascot, { width: mascotSize }, mascotSpace]}><Animated.View style={mascotMotion}><Pressable accessibilityRole="button" accessibilityLabel="Talk to Murmur" accessibilityHint={playback ? 'Pauses the podcast so you can speak.' : 'Starts a conversation.'} onPress={() => { setTapCount((value) => value + 1); onTalk?.(); }}><MurmurMascot size={mascotSize} tapCount={tapCount} phase={state.speechPlaying ? 'speaking' : listening ? 'listening' : state.phase === 'speaking' ? 'thinking' : state.phase} level={state.speechLevel} reducedMotion={reducedMotion} /></Pressable></Animated.View></Animated.View>
+        {playback ? <View testID="detail-voice" style={styles.detailVoice}>
+          <View style={styles.labelRow}><View style={[styles.dot, { backgroundColor: detail.error ? '#A36648' : state.microphone ? '#7B876C' : '#B8A990' }]} /><Text testID="detail-voice-status" accessibilityLabel={`Voice: ${detail.voiceStatus}`} style={styles.label}>{detail.voiceStatus}</Text></View>
+          {detail.heard ? <Text testID="detail-heard" selectable numberOfLines={2} accessibilityLabel={`You said: ${detail.heard}`} style={[styles.transcript, styles.playbackHeard]}>“{detail.heard}”</Text> : null}
+          {detail.reply ? <Text testID="detail-reply" selectable numberOfLines={2} accessibilityLiveRegion="polite" accessibilityRole={detail.error ? 'alert' : 'text'} style={[styles.caption, detail.error && styles.error]}>{detail.reply}</Text> : null}
+        </View> : <View style={styles.labelRow}><View style={[styles.dot, { backgroundColor: state.error ? '#A36648' : '#7B876C' }]} /><Text style={styles.label}>{label}</Text></View>}
         {!playback ? <View style={styles.conversation}>
           {state.heard ? <Text selectable numberOfLines={2} style={styles.transcript}>“{state.heard}”</Text> : null}
           {showReply ? <Text selectable accessibilityLiveRegion="polite" accessibilityRole={state.error ? 'alert' : 'text'} style={[styles.caption, state.error && styles.error]}>{state.caption}</Text> : null}
@@ -93,7 +94,7 @@ const styles = StyleSheet.create({
   stage: { flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 24, paddingBottom: 24 },
   title: { color: '#514A3D', fontFamily: 'Newsreader_400Regular', fontSize: 37, lineHeight: 44, textAlign: 'center', marginTop: 12 },
   mascot: { marginTop: 2, marginBottom: 4 },
-  player: { alignItems: 'center', width: '100%', maxWidth: 430, gap: 9, paddingTop: 20 },
+  player: { alignItems: 'center', width: '100%', maxWidth: 430, gap: 9, paddingTop: 0 },
   artworkFrame: { padding: 8, backgroundColor: '#F4EDE1', borderRadius: 26, borderCurve: 'continuous', boxShadow: '8px 10px 22px #D5C9B6, -6px -6px 18px #FFFBF3', marginBottom: 9 },
   artwork: { width: 174, height: 174, borderRadius: 19 },
   artworkFallback: { alignItems: 'center', justifyContent: 'center', padding: 18 },

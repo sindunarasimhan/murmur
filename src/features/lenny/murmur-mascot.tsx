@@ -4,13 +4,19 @@ import { StyleSheet, View } from 'react-native';
 import Animated, { cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import type { VoicePhase } from './voice-controller';
 
-type Props = { size: number; phase: VoicePhase; reducedMotion: boolean; level?: number };
+type Props = { size: number; phase: VoicePhase; reducedMotion: boolean; level?: number; tapCount?: number };
 
-export function MurmurMascot({ size, phase, reducedMotion, level = 0 }: Props) {
+export function MurmurMascot({ size, phase, reducedMotion, level = 0, tapCount = 0 }: Props) {
   const blink = useSharedValue(1);
   const breath = useSharedValue(0);
   const voice = useSharedValue(0);
   const attention = useSharedValue(0);
+  const jiggle = useSharedValue(0);
+  useEffect(() => {
+    if (tapCount && !reducedMotion) jiggle.value = withSequence(withTiming(-3, { duration: 75 }), withTiming(3, { duration: 100 }), withTiming(0, { duration: 150 }));
+    else jiggle.value = 0;
+    return () => cancelAnimation(jiggle);
+  }, [jiggle, tapCount, reducedMotion]);
   const attentive = phase === 'listening' || phase === 'followup';
   useEffect(() => {
     attention.value = withTiming(attentive ? 1 : 0, { duration: reducedMotion ? 0 : 350 });
@@ -28,10 +34,12 @@ export function MurmurMascot({ size, phase, reducedMotion, level = 0 }: Props) {
     voice.value = withTiming(phase === 'speaking' && !reducedMotion ? Math.min(1, Math.max(0, level)) : 0, { duration: 95 });
     return () => cancelAnimation(voice);
   }, [phase, reducedMotion, voice, level]);
-  const bodyStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -breath.value * 5 }, { rotate: `${attention.value * (-2 + breath.value * 0.7)}deg` }] }));
+  const bodyStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -breath.value * 5 }, { rotate: `${attention.value * (-2 + breath.value * 0.7) + jiggle.value}deg` }] }));
   const eyeStyle = useAnimatedStyle(() => ({ transform: [{ scaleY: blink.value }] }));
+  const auraStyle = useAnimatedStyle(() => ({ opacity: attention.value * (0.18 + breath.value * 0.12), transform: [{ scale: 1 + breath.value * 0.04 }] }));
   const mouthStyle = useAnimatedStyle(() => ({ height: size * (0.013 + voice.value * 0.019), width: size * (0.105 - voice.value * 0.018), backgroundColor: voice.value > 0.12 ? '#49382D' : 'transparent', transform: [{ rotate: '-12deg' }] }));
   return <View accessible accessibilityLabel={`Murmur, ${phase}`} style={{ width: size, height: size }}>
+    <Animated.View pointerEvents="none" style={[styles.aura, auraStyle]} />
     <View style={[styles.shadow, { width: size * 0.48, left: size * 0.27, bottom: size * 0.055 }]} />
     <Animated.View style={[StyleSheet.absoluteFill, bodyStyle]}>
       <Image source={require('../../../assets/images/murmur-mascot-base.png')} style={{ width: size, height: size }} contentFit="contain" />
@@ -46,6 +54,7 @@ export function MurmurMascot({ size, phase, reducedMotion, level = 0 }: Props) {
 }
 
 const styles = StyleSheet.create({
+  aura: { position: 'absolute', width: '82%', height: '82%', left: '9%', top: '9%', borderRadius: 200, backgroundColor: '#BAC8A4', filter: 'blur(16px)' },
   shadow: { position: 'absolute', height: 15, borderRadius: 100, backgroundColor: '#C9B89E', opacity: 0.3, filter: 'blur(9px)' },
   brow: { position: 'absolute', backgroundColor: '#65503D', borderRadius: 20 },
   eye: { position: 'absolute', overflow: 'hidden', borderRadius: 100, backgroundColor: '#FFF8EB', borderTopWidth: 2, borderColor: '#705B45', transform: [{ rotate: '-15deg' }] },

@@ -80,34 +80,76 @@ test('detail punctuation and split assembly do not change home wake recognition'
     assert.equal(invitations, 1);
   } finally { await s.controller.dispose(); }
 });
-test('paused detail accepts followups without another wake and closes when playback resumes', async () => {
+test('tap pauses immediately, accepts an unprefixed question and resumes after its answer', async () => {
   const s = setup(1000);
   try {
     await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(91);
-    s.controller.final('Hey Murmur pause', 'wake'); await delay();
-    assert(s.controller.state.followupOpen); assert(!s.playing);
+    await s.controller.talk(); assert(!s.playing); assert.equal(s.controller.state.phase, 'listening');
     s.controller.final('explain that', 'question'); await delay();
     assert.equal(s.questions.at(-1), 'explain that');
-    s.controller.final('back to the podcast', 'resume'); await delay();
-    assert(s.playing); assert(!s.controller.state.followupOpen); assert.equal(s.position, 91);
+    assert(s.playing); assert.equal(s.position, 91);
     s.controller.final('pause', 'podcast-speech'); await delay(); assert(s.playing);
   } finally { await s.controller.dispose(); }
 });
-test('pause followup window expires without resuming playback or accepting ambient speech', async () => {
+for (const initiallyPlaying of [true, false]) {
+  test(`tap skip ad confirms before seeking and restores ${initiallyPlaying ? 'playing' : 'paused'}`, async () => {
+    const s = setup(1000); const events: string[] = [];
+    try {
+      await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(25);
+      if (!initiallyPlaying) { s.ports.audio.pause(); s.controller.playbackChanged(false); }
+      const seek = s.ports.audio.seek;
+      s.ports.audio.seek = async (value) => { events.push('seek'); return seek(value); };
+      s.ports.speech.say = async (message) => { assert.match(message, /Skipping the ad/); assert(!s.playing); events.push('confirm'); };
+      await s.controller.talk(); s.controller.final('skip ad', 'skip'); await delay();
+      assert.deepEqual(events, ['confirm', 'seek']); assert.equal(s.position, 40);
+      assert.equal(s.playing, initiallyPlaying);
+      s.controller.final('pause', 'ambient'); await delay(); assert.equal(s.playing, initiallyPlaying);
+    } finally { await s.controller.dispose(); }
+  });
+}
+test('a tap question on an already paused episode does not start playback', async () => {
+  const s = setup(1000);
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny');
+    await s.controller.talk(); s.controller.final('pause', 'pause'); await delay();
+    await s.controller.talk(); s.controller.final('explain that', 'question'); await delay();
+    assert(!s.playing); assert.equal(s.controller.state.phase, 'paused');
+    await s.controller.talk(); s.controller.final('back to the podcast', 'resume'); await delay();
+    assert(s.playing);
+  } finally { await s.controller.dispose(); }
+});
+test('a silent tap times out and restores the exact prior playback position', async () => {
   const s = setup(10);
   try {
-    await s.controller.activate(); await s.controller.submit('play Lenny'); await s.controller.submit('pause');
-    assert(s.controller.state.followupOpen); await delay(30);
-    assert(!s.controller.state.followupOpen); assert(!s.playing);
+    await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(127.5);
+    await s.controller.talk(); assert(!s.playing);
+    await delay(30); assert(s.playing); assert.equal(s.position, 127.5);
+    s.controller.final('pause', 'ambient'); await delay(); assert(s.playing);
+  } finally { await s.controller.dispose(); }
+});
+test('home tap invites an episode choice without changing the selection flow', async () => {
+  const s = setup(1000);
+  try {
+    await s.controller.talk(); assert.equal(s.controller.state.phase, 'followup');
+    s.controller.final('play Lenny', 'choice'); await delay();
+    assert(s.playing); assert.equal(s.controller.state.episode?.id, episode.id);
+  } finally { await s.controller.dispose(); }
+});
+test('tap explicit pause stays paused and closes the request immediately', async () => {
+  const s = setup(10);
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny'); await s.controller.talk();
+    s.controller.final('pause', 'pause'); await delay();
+    assert.equal(s.controller.state.phase, 'paused'); assert(!s.playing);
     s.controller.final('back to the podcast', 'late'); await delay(); assert(!s.playing);
   } finally { await s.controller.dispose(); }
 });
 for (const destination of ['another episode', 'home'] as const) {
-  test(`pause permits an unprefixed request for ${destination}`, async () => {
+  test(`tap permits an unprefixed request for ${destination}`, async () => {
     const s = setup(1000);
     try {
       await s.controller.activate(); await s.controller.submit('play Lenny');
-      s.controller.final('Hey Murmur pause', 'pause'); await delay();
+      await s.controller.talk();
       const other = { ...episode, id: 'another-episode', title: 'Another guest' };
       s.ports.api.resolve = async () => destination === 'home'
         ? { kind: 'home', message: '' } : { kind: 'play', episode: other, message: 'Another episode.' };
@@ -117,13 +159,13 @@ for (const destination of ['another episode', 'home'] as const) {
     } finally { await s.controller.dispose(); }
   });
 }
-test('background closes an open pause conversation and reopening keeps it paused', async () => {
+test('background cancels an unfinished tap and restores the prior playback state', async () => {
   const s = setup(1000);
   try {
-    await s.controller.activate(); await s.controller.submit('play Lenny'); await s.controller.submit('pause');
-    assert(s.controller.state.followupOpen);
-    await s.controller.suspendVoice(); assert(!s.controller.state.followupOpen); assert(!s.mic);
-    await s.controller.activate(); assert(!s.playing); assert(!s.controller.state.followupOpen);
+    await s.controller.activate(); await s.controller.submit('play Lenny'); await s.controller.talk();
+    assert(!s.playing);
+    await s.controller.suspendVoice(); assert(s.playing); assert(!s.mic);
+    await s.controller.activate(); assert(s.playing);
   } finally { await s.controller.dispose(); }
 });
 function setup(followupMs = 30) {
@@ -131,7 +173,7 @@ function setup(followupMs = 30) {
   const spoken: string[] = []; const questions: string[] = [];
   let current: ListeningSession = { id: 'session', episodeId: episode.id, audioVersion: episode.audioVersion, revision: 0, positionSeconds: 0, bookmarkSeconds: null, phase: 'paused', pendingAction: null };
   const ports: ListeningPorts = {
-    uuid: () => `request-${++next}`, changed: () => {}, followupMs, conversationMs: followupMs,
+    uuid: () => `request-${++next}`, changed: () => {}, followupMs,
     microphone: { start: async () => { mic = true; }, stop: async () => { mic = false; } },
     audio: { position: () => position, playing: () => playing, setDucked: () => {}, pause: () => { playing = false; }, play: () => { playing = true; },
       load: async (_episode, value) => { position = value; }, seek: async (value) => { position = value; return value; }, clear: () => { position = 0; } },

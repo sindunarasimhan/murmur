@@ -1,14 +1,15 @@
 {
   "status": "not_complete",
   "scope": "Home selection through detail commands, conversation, background recovery, and return home",
-  "interactionPolicy": "Accepted detail wake pauses immediately instead of ducking. Silence, cancel, and backgrounding restore prior playback only for unfinished interactions. Explicit pause, exploration, and errors stay paused.",
+  "interactionPolicy": "Detail mascot tap opens one request and pauses immediately. Answer completion restores prior playback and closes the request, without a twenty-second follow-up window. Explicit pause stays paused. Ad skip confirms before seeking, then restores its prior playing/paused intent. Silence and backgrounding cancel unfinished collection. Wake remains an optional existing path; physical foreground capture still waits for wake after a tap request closes.",
   "software": {
     "typecheck": "passed",
     "lint": "passed",
-    "unitTests": { "passed": 303, "failed": 0 },
+    "unitTests": { "passed": 314, "failed": 0 },
     "backendTests": { "passed": 38, "failed": 0, "liveSkippedByDefault": 5 },
     "iosJavaScriptExport": "passed; not a native device run",
-    "renderedPreview": "Listening, speaking, playing, error and home states inspected at phone widths; no real audio in this fixture",
+    "renderedPreview": "Updated listening, playing and home layouts inspected at a 390 by 844 browser viewport. Detail artwork and captions are above the larger lower mascot. Browser fixture has no real audio; native tap hit testing, animation and safe-area layout still need phone verification.",
+    "tapFlow": "Unit coverage includes immediate pause, unprefixed question, exact auto-resume, explicit pause, silent timeout, already-paused question, episode switch, return home, background cancellation, home invitation and confirmation-before-seek for ad skipping from both playing and paused states. Four-guest live text flow passed with tap-to-resume, real generated reply bytes and media range requests; native player simulated.",
     "liveTextFlow": "Two full text-driven flows passed after pause-on-wake, including the final controller revision",
     "liveSemanticTests": { "passed": 12, "failed": 0, "skipped": 0, "catalogContextRounds": 2 },
     "liveQuietAudioFlow": "Prior ducking version passed the full generated-PCM flow. The pause-on-wake version has not yet repeated this quiet-audio matrix.",
