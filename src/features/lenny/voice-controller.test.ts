@@ -710,6 +710,47 @@ test('idle invocation retains wake monitoring and reactivates without a button',
     assert(s.playing); assert.equal(s.controller.state.episode?.id, episode.id);
   } finally { await s.controller.dispose(); }
 });
+test('a detail request failure preserves capture and lets a new wake retry without reloading', async () => {
+  const s = setup();
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(83.25);
+    const resolve = s.ports.api.resolve;
+    s.ports.api.resolve = async () => { throw new Error('Temporary decision failure'); };
+    s.controller.final('Hey Murmur pause', 'failed-request'); await delay();
+    assert.equal(s.controller.state.error, 'Temporary decision failure');
+    assert(s.controller.state.microphone); assert(!s.playing); assert.equal(s.position, 83.25);
+    s.ports.api.resolve = resolve;
+    s.controller.final('Hey Murmur resume', 'retry'); await delay();
+    assert.equal(s.controller.state.error, undefined); assert(s.playing); assert.equal(s.position, 83.25);
+  } finally { await s.controller.dispose(); }
+});
+test('failed selection speech never starts playback but keeps the microphone available', async () => {
+  const s = setup();
+  try {
+    await s.controller.activate();
+    const say = s.ports.speech.say;
+    s.ports.speech.say = async () => { throw new Error('Speech unavailable'); };
+    await s.controller.submit('play Lenny');
+    assert(!s.playing); assert(s.controller.state.microphone);
+    assert.equal(s.controller.state.error, 'Speech unavailable');
+    s.ports.speech.say = say;
+    s.controller.final('Hey Murmur resume', 'retry'); await delay();
+    assert(s.playing); assert.equal(s.controller.state.error, undefined);
+  } finally { await s.controller.dispose(); }
+});
+test('failed home invitation can be retried by voice without reopening', async () => {
+  const s = setup();
+  try {
+    await s.controller.activate();
+    const invite = s.ports.api.invite;
+    s.ports.api.invite = async () => { throw new Error('Invitation unavailable'); };
+    s.controller.final('Hey Murmur', 'failed-invite'); await delay();
+    assert(s.controller.state.microphone); assert.equal(s.controller.state.error, 'Invitation unavailable');
+    s.ports.api.invite = invite;
+    s.controller.final('Hey Murmur', 'retry-invite'); await delay();
+    assert.equal(s.controller.state.phase, 'followup'); assert.equal(s.controller.state.error, undefined);
+  } finally { await s.controller.dispose(); }
+});
 test('voice failure accurately reports microphone off and cannot wake until reopened', async () => {
   const s = setup();
   try {
