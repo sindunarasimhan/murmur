@@ -55,7 +55,7 @@ try {
     if (Date.now() > deadline) throw new Error('Murmur could not start. Check the backend logs.');
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  const focus = process.env.MURMUR_CATALOG !== 'all';
+  const focus = process.env.MURMUR_CATALOG === 'focus';
   const expectedCount = focus ? 1 : 50;
   const prepared = (catalog) => Array.isArray(catalog) && catalog.length === expectedCount && (!focus || catalog[0].id === 'lenny-brian-halligan' && catalog[0].audioPath?.startsWith('/media/'));
   if (!prepared(await ready('/v2/catalog'))) {

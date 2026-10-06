@@ -15,7 +15,7 @@ import { preservePlayback } from './preserve-playback';
 import type { CaptionTrack, PreparedEpisode } from '../../../shared/listening';
 
 const initial: VoiceState = { phase: 'idle', microphone: false, caption: 'A good conversation starts with listening.', heard: '' };
-const Context = createContext<{ state: VoiceState; activate(): void; seconds: number; count: number; featured?: PreparedEpisode; captions: CaptionTrack['cues']; captionsError?: string } | null>(null);
+const Context = createContext<{ state: VoiceState; activate(): void; playing: boolean; seconds: number; count: number; featured?: PreparedEpisode; captions: CaptionTrack['cues']; captionsError?: string } | null>(null);
 
 export function LennyVoiceProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState(initial);
@@ -184,7 +184,7 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
     return () => abort.abort();
   }, [episodeId, audioVersion]);
   const currentCaptions = captionResult?.key === captionKey ? captionResult : undefined;
-  return <Context.Provider value={{ state, seconds: status.currentTime, count, featured, captions: currentCaptions?.cues ?? [], captionsError: currentCaptions?.error, activate: () => { void controller.current?.activate(); } }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ state, playing: status.playing, seconds: status.currentTime, count, featured, captions: currentCaptions?.cues ?? [], captionsError: currentCaptions?.error, activate: () => { void controller.current?.activate(); } }}>{children}</Context.Provider>;
 }
 export function useLennyVoice() {
   const value = useContext(Context);

@@ -64,6 +64,7 @@ async function json<T>(path: string, method: string, schema: z.ZodType<T>, body?
   catch (error) { if (error instanceof ListeningApiError && error.status === 401) initialization = undefined; throw error; }
 }
 export const listeningApi = {
+  invite: async (history: string[], signal?: AbortSignal) => (await json('/catalog/invite', 'POST', z.object({ message: z.string().trim().min(1).max(1000) }), { history }, signal)).message,
   captions: (episodeId: string, audioVersion: string, signal?: AbortSignal) => json(`/catalog/${encodeURIComponent(episodeId)}/captions?audioVersion=${encodeURIComponent(audioVersion)}`, 'GET', captionTrackSchema, undefined, signal),
   catalog: (signal?: AbortSignal) => json('/catalog', 'GET', z.array(episodeSchema), undefined, signal),
   resolve: (utterance: string, currentEpisodeId: string | undefined, history: string[], signal?: AbortSignal) => json('/catalog/resolve', 'POST', catalogResolutionSchema, { utterance, currentEpisodeId, history }, signal),

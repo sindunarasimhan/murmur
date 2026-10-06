@@ -17,6 +17,7 @@ function setup(followupMs = 30) {
       load: async (_episode, value) => { position = value; }, seek: async (value) => { position = value; return value; }, clear: () => { position = 0; } },
     speech: { say: async (text) => { spoken.push(text); }, stop: async () => {} },
     api: {
+      invite: async () => 'Which podcast shall we listen to?',
       resolve: async (text) => text === 'play Lenny' ? { kind: 'play', episode, message: 'Lenny with Guest One.' }
         : text === 'stop listening' ? { kind: 'stop', message: 'Microphone off.' } : { kind: 'current', message: '' },
       open: async () => current, session: async () => current,
@@ -144,6 +145,97 @@ test('wake phrase requires an explicit Hey Murmur and preserves the following re
   assert.equal(wakeRequest('People sometimes murmur about pricing.'), undefined);
   assert.equal(wakeRequest('podcast background. Hey, Murmur! What did she mean?'), 'What did she mean?');
   assert.equal(wakeRequest('Hey mur mur, skip this ad'), 'skip this ad');
+});
+test('bare home wake speaks generated invitation once, then accepts an unprefixed delayed episode choice', async () => {
+  const s = setup(10);
+  let invitations = 0;
+  s.ports.api.invite = async () => { invitations++; return 'What would you enjoy listening to today?'; };
+  try {
+    await s.controller.activate();
+    s.controller.final('Hey Murmur', 'wake'); await delay();
+    s.controller.final('Hey Murmur', 'wake'); await delay(25);
+    assert.equal(invitations, 1);
+    assert.equal(s.spoken.at(-1), 'What would you enjoy listening to today?');
+    assert.equal(s.controller.state.phase, 'followup'); assert(!s.playing);
+    s.controller.final('play Lenny', 'selection'); await delay();
+    assert(s.playing); assert.equal(s.controller.state.episode?.id, episode.id);
+  } finally { await s.controller.dispose(); }
+});
+test('a combined wake and episode request bypasses the invitation', async () => {
+  const s = setup();
+  s.ports.api.invite = async () => { assert.fail('Do not insert a greeting before a complete request'); };
+  try {
+    await s.controller.activate();
+    s.controller.final('Hey Murmur, play Lenny', 'combined'); await delay();
+    assert(s.playing);
+  } finally { await s.controller.dispose(); }
+});
+test('backgrounding cancels a pending invitation without late speech', async () => {
+  const s = setup();
+  let finish!: (text: string) => void;
+  s.ports.api.invite = () => new Promise((resolve) => { finish = resolve; });
+  try {
+    await s.controller.activate(); s.controller.final('Hey Murmur', 'wake');
+    await s.controller.suspendVoice(); finish('What would you like to hear?'); await delay();
+    assert.equal(s.spoken.length, 0); assert(!s.mic); assert(!s.playing);
+  } finally { await s.controller.dispose(); }
+});
+test('an episode request spoken while the invitation is generating takes priority', async () => {
+  const s = setup();
+  let finish!: (text: string) => void;
+  s.ports.api.invite = () => new Promise((resolve) => { finish = resolve; });
+  try {
+    await s.controller.activate(); s.controller.final('Hey Murmur', 'wake');
+    s.controller.final('play Lenny', 'selection'); await delay();
+    assert(s.playing);
+    finish('What would you like to hear?'); await delay();
+    assert.equal(s.spoken.length, 1); assert(s.playing);
+  } finally { await s.controller.dispose(); }
+});
+test('wake transcript remains readable through generated invitation and followup', async () => {
+  const s = setup();
+  try {
+    await s.controller.activate();
+    s.controller.partial('Hey', 'wake'); assert.equal(s.controller.state.heard, 'Hey');
+    s.controller.partial('Hey Murmur', 'wake'); assert.equal(s.controller.state.heard, 'Hey Murmur');
+    s.controller.final('Hey Murmur', 'wake'); await delay();
+    assert.equal(s.controller.state.heard, 'Hey Murmur');
+    assert.equal(s.controller.state.phase, 'followup');
+  } finally { await s.controller.dispose(); }
+});
+test('empty transcription does not erase text or trigger another invitation', async () => {
+  const s = setup(); let invitations = 0;
+  s.ports.api.invite = async () => { invitations++; return 'Which podcast would you like?'; };
+  try {
+    await s.controller.activate();
+    s.controller.final('Hey Murmur', 'wake'); await delay();
+    const heard = s.controller.state.heard;
+    s.controller.partial('', 'silence'); s.controller.final('', 'silence'); await delay();
+    assert.equal(invitations, 1); assert.equal(s.controller.state.heard, heard);
+  } finally { await s.controller.dispose(); }
+});
+test('reply beginning during invitation is interpreted when its final arrives after speech ends', async () => {
+  const s = setup(); let finish!: () => void;
+  const say = s.ports.speech.say;
+  s.ports.speech.say = async (...args) => { await say(...args); await new Promise<void>((resolve) => { finish = resolve; }); };
+  try {
+    await s.controller.activate(); s.controller.final('Hey Murmur', 'wake'); await delay();
+    assert.equal(s.controller.state.phase, 'speaking');
+    s.controller.partial('play', 'selection');
+    finish(); await delay(); s.ports.speech.say = say;
+    s.controller.final('play Lenny', 'selection'); await delay();
+    assert(s.playing); assert.equal(s.controller.state.episode?.id, episode.id);
+  } finally { await s.controller.dispose(); }
+});
+test('late transcript of the invitation itself is not treated as a listener request', async () => {
+  const s = setup();
+  let requests = 0; const resolve = s.ports.api.resolve;
+  s.ports.api.resolve = async (...args) => { requests++; return resolve(...args); };
+  try {
+    await s.controller.activate(); s.controller.final('Hey Murmur', 'wake'); await delay();
+    s.controller.final('Which podcast shall we listen to?', 'speaker-echo'); await delay();
+    assert.equal(requests, 0); assert.equal(s.controller.state.phase, 'followup');
+  } finally { await s.controller.dispose(); }
 });
 test('a corrected final wake transcript interrupts playback even when its partial was ignored', async () => {
   const s = setup();

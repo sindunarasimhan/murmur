@@ -54,6 +54,7 @@ const transcripts: string[] = [];
 let background: Buffer | undefined;
 let sessionId = '';
 const api: ListeningPorts['api'] = {
+  invite: async (history) => (await request('/catalog/invite', { history })).message,
   resolve: (utterance, currentEpisodeId, history) => request('/catalog/resolve', { utterance, currentEpisodeId, history }),
   open: async (episodeId) => { const session = await request('/sessions', { episodeId }); sessionId = session.id; return session; },
   session: (id) => request(`/sessions/${id}`, undefined, 'GET'),

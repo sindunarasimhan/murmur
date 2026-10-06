@@ -39,6 +39,7 @@ const speech: string[] = [];
 const states: string[] = [];
 const unsupported = async (): Promise<never> => { throw new Error('Outside invocation test scope'); };
 const api: ListeningPorts['api'] = {
+  invite: async (history) => (await request('/catalog/invite', { history })).message,
   resolve: (utterance, currentEpisodeId, history) => request('/catalog/resolve', { utterance, currentEpisodeId, history }),
   open: (episodeId) => request('/sessions', { episodeId }),
   session: (id) => request(`/sessions/${id}`, undefined, 'GET'),

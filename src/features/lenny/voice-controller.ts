@@ -9,6 +9,7 @@ export type ListeningPorts = {
   microphone: { start(onStage: (caption: string) => void): Promise<void>; stop(): Promise<void> };
   speech: { say(text: string, signal: AbortSignal, turn?: TurnResult): Promise<void>; stop(): Promise<void> };
   api: {
+    invite(history: string[], signal: AbortSignal): Promise<string>;
     resolve(utterance: string, episodeId: string | undefined, history: string[], signal: AbortSignal): Promise<CatalogResolution>;
     open(id: string): Promise<ListeningSession>;
     session(id: string): Promise<ListeningSession>;
@@ -45,6 +46,7 @@ export class LennyVoiceController {
   private engagement: Engagement = 'wake-required';
   private background = false;
   private needsPlaybackSync = false;
+  private inviting = false;
   private remember(question: string, answer: string) {
     this.history = [...this.history, question.slice(0, 1000), answer.slice(0, 1000)].slice(-4);
   }
@@ -55,6 +57,7 @@ export class LennyVoiceController {
   }
   private current(epoch: number) { return !this.disposed && epoch === this.epoch; }
   private next() {
+    this.inviting = false;
     this.update({ speechPlaying: false, speechLevel: 0 });
     this.abort.abort(); this.abort = new AbortController(); clearTimeout(this.timer); clearTimeout(this.speakingDeadline);
     this.speakingDeadline = undefined;
@@ -116,6 +119,11 @@ export class LennyVoiceController {
   partial(text: string, item: string) {
     if (!this.state.microphone || this.disposed) return;
     const wake = wakeRequest(text);
+    if (this.inviting && this.state.phase === 'thinking' && wake === undefined && text.trim()) {
+      this.inviting = false;
+      this.next();
+      this.update({ phase: 'listening' });
+    }
     if (wake !== undefined && this.wakeItem !== item) {
       this.wakeItem = item; this.item = item; this.itemModes.set(item, true);
       const epoch = this.next();
@@ -142,8 +150,28 @@ export class LennyVoiceController {
     if (!this.itemModes.get(item) || this.item !== item || !['listening', 'followup'].includes(this.state.phase)) return;
     this.itemModes.set(item, false); this.item = undefined; this.awaitingFinal = false;
     const request = wakeRequest(text) ?? text.trim();
-    if (!request) { this.armSilence(this.epoch); return; }
+    if (!request) {
+      if (!this.state.episode) void this.invite();
+      else this.armSilence(this.epoch);
+      return;
+    }
     void this.submit(request.slice(0, 1000));
+  }
+  private async invite() {
+    const epoch = this.next();
+    this.inviting = true;
+    this.engagement = 'catalog-dialogue';
+    this.update({ phase: 'thinking', heard: '', caption: '' });
+    try {
+      const message = await this.ports.api.invite(this.history, this.abort.signal);
+      if (!this.current(epoch)) return;
+      this.remember('Hey Murmur', message);
+      await this.say(message, epoch);
+      if (!this.current(epoch)) return;
+      this.update({ phase: 'followup', caption: 'Listening', heard: '' });
+      this.armSilence(epoch);
+    } catch (error) { await this.fail(error, epoch); }
+    finally { if (this.current(epoch)) this.inviting = false; }
   }
   activity() {
     if (!['listening', 'followup'].includes(this.state.phase)) return;
