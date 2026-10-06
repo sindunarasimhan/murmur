@@ -49,7 +49,7 @@ const controller = new LennyVoiceController({
   uuid: randomUUID, api, followupMs: 6000,
   changed: (state) => { if (states.at(-1) !== state.phase) states.push(state.phase); },
   audio: {
-    position: () => 0, pause: () => {}, clear: () => {}, seek: async (seconds) => seconds,
+    position: () => 0, playing: () => false, pause: () => {}, clear: () => {}, seek: async (seconds) => seconds,
     load: async (episode) => {
       assert(episode.audioPath);
       const response = await fetch(episode.audioPath.startsWith('https:') ? episode.audioPath : `${origin}/v2${episode.audioPath}`, { headers: { Range: 'bytes=0-1023' } });

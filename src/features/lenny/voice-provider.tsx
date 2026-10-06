@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AppState } from 'react-native';
-import { requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioStream } from 'expo-audio';
+import { requestRecordingPermissionsAsync, setAudioModeAsync, setIsAudioActiveAsync, useAudioPlayer, useAudioPlayerStatus, useAudioStream } from 'expo-audio';
 import * as Crypto from 'expo-crypto';
 import { listeningApi, listeningBaseUrl, voiceGatewayUrl } from '@/services/api/listening-client';
 import { ContinuousTranscription } from '@/services/voice/continuous-transcription';
@@ -11,6 +11,7 @@ import { LennyVoiceController, wakeRequest, type VoiceState } from './voice-cont
 import { ForegroundVoice } from './foreground-voice';
 import { NativeVoiceCapture } from './native-voice-capture';
 import { loadEpisodeAudio } from './load-episode-audio';
+import { preservePlayback } from './preserve-playback';
 import type { CaptionTrack, PreparedEpisode } from '../../../shared/listening';
 
 const initial: VoiceState = { phase: 'idle', microphone: false, caption: 'A good conversation starts with listening.', heard: '' };
@@ -72,15 +73,19 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
       },
       audio: {
         position: () => Number.isFinite(player.currentTime) ? player.currentTime : 0,
+        playing: () => player.playing,
         load: async (episode, position, signal) => {
           if (!episode.audioPath) throw new Error('That episode’s audio is unavailable.');
           const uri = episode.audioPath.startsWith('https://') ? episode.audioPath : `${listeningBaseUrl()}${episode.audioPath}`;
           await loadEpisodeAudio(player, { uri, name: episode.title }, position, signal, () => Boolean(statusRef.current.error));
+          if (!signal.aborted && process.env.EXPO_OS !== 'web') player.setActiveForLockScreen(true, {
+            title: episode.title, artist: episode.showTitle, artworkUrl: episode.artworkUrl ?? undefined,
+          }, { showSeekBackward: true, showSeekForward: true });
         },
         play: () => { player.play(); }, pause: () => { player.pause(); },
         seek: async (seconds) => { await player.seekTo(seconds, 0, 0); return player.currentTime; },
         // Expo iOS replace expects an AudioSource record, even when clearing it.
-        clear: () => { player.replace({}); },
+        clear: () => { if (process.env.EXPO_OS !== 'web') player.clearLockScreenControls(); player.replace({}); },
       },
       microphone: {
         async start(onStage) {
@@ -100,13 +105,15 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
           const live = new ContinuousTranscription({
             url: () => voiceGatewayUrl().replace(/\/voice$/, '/live-voice'), ticket: (signal) => listeningApi.liveTicket(signal),
             callbacks: { partial: (text, id) => {
+              if (generation !== captureGeneration.current) return;
               if (__DEV__ && wakeRequest(text) !== undefined) console.info('[murmur-voice] partial-wake', { phase: instance.state.phase });
               instance.partial(text, id);
             }, final: (text, id) => {
+              if (generation !== captureGeneration.current) return;
               if (__DEV__) console.info('[murmur-voice] transcript-final', { wake: wakeRequest(text) !== undefined, characters: text.length, phase: instance.state.phase });
               instance.final(text, id);
             },
-              activity: () => instance.activity(), error: (error) => { void instance.fail(error); } },
+              activity: () => { if (generation === captureGeneration.current) instance.activity(); }, error: (error) => { if (generation === captureGeneration.current) void instance.fail(error); } },
           });
           transcriber.current = live;
           onStage('Connecting to the voice service…');
@@ -114,16 +121,19 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
           if (generation !== captureGeneration.current) { live.stop(); return; }
           if (process.env.EXPO_OS !== 'web') {
             onStage('Checking microphone audio…');
-            await nativeCapture.start();
+            await preservePlayback(player, () => nativeCapture.start(), () => alive && generation === captureGeneration.current);
           }
         },
         async stop() {
-          captureGeneration.current++;
+          const generation = ++captureGeneration.current;
           transcriber.current?.stop(); transcriber.current = undefined;
           const web = capture.current; capture.current = undefined;
           await web?.stop().catch(() => undefined);
-          if (process.env.EXPO_OS !== 'web') await nativeCapture.stop();
-          else await setAudioModeAsync(PLAYBACK_AUDIO_MODE);
+          await preservePlayback(player, async () => {
+            if (process.env.EXPO_OS !== 'web') await nativeCapture.stop();
+            else await setAudioModeAsync(PLAYBACK_AUDIO_MODE);
+            await setIsAudioActiveAsync(true);
+          }, () => alive && generation === captureGeneration.current);
         },
       },
       speech: {
@@ -155,6 +165,7 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
     void listeningApi.catalog(fetchController.signal).then((episodes) => { if (alive) { setCount(episodes.length); setFeatured(episodes.length === 1 ? episodes[0] : undefined); } }).catch(() => undefined);
     return () => { alive = false; fetchController.abort(); foreground.remove(); clearInterval(progress); clearInterval(inputHealth); void lifecycle.dispose(); };
   }, [onBuffer, player]);
+  useEffect(() => { controller.current?.playbackChanged(status.playing); }, [status.playing]);
   useEffect(() => { if (status.didJustFinish) void controller.current?.ended(); }, [status.didJustFinish]);
   useEffect(() => {
     if (status.error && state.episode) void controller.current?.fail(new Error('The podcast audio stopped unexpectedly. Your place is saved.'));

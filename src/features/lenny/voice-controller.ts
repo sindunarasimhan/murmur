@@ -5,7 +5,7 @@ type Engagement = 'wake-required' | 'catalog-dialogue' | 'episode-dialogue';
 export type VoiceState = { phase: VoicePhase; microphone: boolean; speechPlaying?: boolean; speechLevel?: number; episode?: PreparedEpisode; caption: string; heard: string; error?: string };
 export type ListeningPorts = {
   uuid(): string;
-  audio: { position(): number; load(episode: PreparedEpisode, position: number, signal: AbortSignal): Promise<void>; play(): void; pause(): void; seek(seconds: number): Promise<number>; clear(): void };
+  audio: { position(): number; playing(): boolean; load(episode: PreparedEpisode, position: number, signal: AbortSignal): Promise<void>; play(): void; pause(): void; seek(seconds: number): Promise<number>; clear(): void };
   microphone: { start(onStage: (caption: string) => void): Promise<void>; stop(): Promise<void> };
   speech: { say(text: string, signal: AbortSignal, turn?: TurnResult): Promise<void>; stop(): Promise<void> };
   api: {
@@ -43,6 +43,8 @@ export class LennyVoiceController {
   private awaitingFinal = false;
   private resumeAfterConversation = false;
   private engagement: Engagement = 'wake-required';
+  private background = false;
+  private needsPlaybackSync = false;
   private remember(question: string, answer: string) {
     this.history = [...this.history, question.slice(0, 1000), answer.slice(0, 1000)].slice(-4);
   }
@@ -81,10 +83,11 @@ export class LennyVoiceController {
     });
   }
   async activate() {
+    this.background = false;
     const epoch = this.next();
-    this.ports.audio.pause(); await this.ports.speech.stop();
-    if (!this.current(epoch)) return;
     this.update({ phase: 'connecting', error: undefined, heard: '', caption: 'Opening your microphone…' });
+    await this.ports.speech.stop();
+    if (!this.current(epoch)) return;
     try {
       await this.ports.microphone.stop();
       if (!this.current(epoch)) return;
@@ -100,8 +103,14 @@ export class LennyVoiceController {
       // would shut down a newer activation after a late permission response.
       if (!this.current(epoch)) return;
       this.itemModes.clear(); this.item = undefined;
-      this.update({ microphone: true, phase: 'listening', caption: 'Who or what would you like to hear?' });
-      this.armSilence(epoch);
+      if (this.state.episode) {
+        this.resumeAfterConversation = this.ports.audio.playing();
+        this.needsPlaybackSync = true;
+        this.update({ microphone: true, phase: this.resumeAfterConversation ? 'playing' : 'paused', caption: 'Say “Hey Murmur” whenever you need me.' });
+      } else {
+        this.update({ microphone: true, phase: 'listening', caption: 'Who or what would you like to hear?' });
+        this.armSilence(epoch);
+      }
     } catch (error) { await this.fail(error, epoch); }
   }
   partial(text: string, item: string) {
@@ -169,11 +178,17 @@ export class LennyVoiceController {
     await this.ports.speech.say(text, this.abort.signal, turn);
   }
   async submit(text: string, returning = false) {
+    if (this.background || this.disposed) return;
     const epoch = this.next();
+    this.update({ phase: 'thinking', heard: text, caption: 'Following your thought…', error: undefined });
     this.ports.audio.pause(); await this.ports.speech.stop();
     if (!this.current(epoch)) return;
-    this.update({ phase: 'thinking', heard: text, caption: 'Following your thought…', error: undefined });
     try {
+      if (this.needsPlaybackSync) {
+        await this.observe(this.resumeAfterConversation ? 'play' : 'pause', epoch);
+        if (!this.current(epoch)) return;
+        this.needsPlaybackSync = false;
+      }
       const resolution = returning ? { kind: 'current' as const, message: '' }
         : await this.ports.api.resolve(text, this.state.episode?.id, this.history, this.abort.signal);
       if (!this.current(epoch)) return;
@@ -257,12 +272,21 @@ export class LennyVoiceController {
     } catch (error) { await this.fail(error, epoch); }
   }
   async progress() {
-    if (this.state.phase !== 'playing') return;
+    if (this.background || this.state.phase !== 'playing') return;
     const epoch = this.epoch;
-    try { await this.observe('progress', epoch); } catch (error) { await this.fail(error, epoch); }
+    try {
+      await this.observe(this.needsPlaybackSync ? 'play' : 'progress', epoch);
+      if (this.current(epoch)) this.needsPlaybackSync = false;
+    } catch (error) { await this.fail(error, epoch); }
   }
   async ended() {
-    if (this.state.phase !== 'playing') return;
+    if (this.background || !this.state.microphone) {
+      this.resumeAfterConversation = false;
+      this.needsPlaybackSync = true;
+      this.update({ phase: 'paused' });
+      return;
+    }
+    if (!this.state.episode || !['playing', 'paused'].includes(this.state.phase)) return;
     const epoch = this.next();
     this.resumeAfterConversation = false;
     this.engagement = 'catalog-dialogue';
@@ -271,6 +295,24 @@ export class LennyVoiceController {
       await this.say('That’s the end of the episode. What would you like to hear next?', epoch);
       if (this.current(epoch)) { this.update({ phase: 'followup' }); this.armSilence(epoch); }
     } catch (error) { await this.fail(error, epoch); }
+  }
+  playbackChanged(playing: boolean) {
+    if (!this.state.episode || !['playing', 'paused'].includes(this.state.phase)) return;
+    this.resumeAfterConversation = playing;
+    this.needsPlaybackSync = true;
+    this.update({ phase: playing ? 'playing' : 'paused' });
+  }
+  async suspendVoice() {
+    this.background = true;
+    const epoch = this.next();
+    this.needsPlaybackSync = true;
+    this.engagement = 'wake-required';
+    this.item = undefined; this.wakeItem = undefined; this.itemModes.clear();
+    this.update({ microphone: false, heard: '', phase: this.state.episode ? this.ports.audio.playing() ? 'playing' : 'paused' : 'idle', caption: '' });
+    await Promise.all([this.ports.microphone.stop(), this.ports.speech.stop()]);
+    if (!this.current(epoch)) return;
+    this.resumeAfterConversation = this.ports.audio.playing();
+    this.update({ phase: this.state.episode ? this.resumeAfterConversation ? 'playing' : 'paused' : 'idle' });
   }
   async shutdown(announce = false) {
     const epoch = this.next();
@@ -291,6 +333,15 @@ export class LennyVoiceController {
   async fail(error: unknown, epoch = this.epoch) {
     if (!this.current(epoch)) return;
     let message = error instanceof Error ? error.message : 'Murmur could not finish that request. Your place is saved.';
+    if (this.state.episode) {
+      const background = this.background;
+      try { await this.suspendVoice(); }
+      catch { message += ' Voice cleanup failed. Reopen Murmur to retry.'; }
+      if (!this.current(epoch + 1)) return;
+      this.background = background;
+      this.update({ error: message, caption: message });
+      return;
+    }
     try { await this.shutdown(); }
     catch { message += ' Audio cleanup also failed. Close and reopen Murmur.'; }
     if (!this.current(epoch + 1)) return;

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { LennyVoiceController, wakeRequest, type ListeningPorts } from './voice-controller';
+import { ForegroundVoice } from './foreground-voice';
 import type { ListeningSession, PlaybackAction, PreparedEpisode, TurnResult } from '../../../shared/listening';
 
 const episode: PreparedEpisode = { id: 'lenny-one', title: 'A useful conversation', guest: 'Guest One', showTitle: 'Lenny’s Podcast', description: '', audioVersion: 'a'.repeat(64), durationSeconds: 1000, status: 'ready', audioPath: 'https://example.org/audio.mp3', transcriptReady: true };
@@ -12,7 +13,7 @@ function setup(followupMs = 30) {
   const ports: ListeningPorts = {
     uuid: () => `request-${++next}`, changed: () => {}, followupMs,
     microphone: { start: async () => { mic = true; }, stop: async () => { mic = false; } },
-    audio: { position: () => position, pause: () => { playing = false; }, play: () => { playing = true; },
+    audio: { position: () => position, playing: () => playing, pause: () => { playing = false; }, play: () => { playing = true; },
       load: async (_episode, value) => { position = value; }, seek: async (value) => { position = value; return value; }, clear: () => { position = 0; } },
     speech: { say: async (text) => { spoken.push(text); }, stop: async () => {} },
     api: {
@@ -39,6 +40,106 @@ function setup(followupMs = 30) {
   const controller = new LennyVoiceController(ports);
   return { controller, ports, spoken, questions, seek: (value: number) => { position = value; }, get position() { return position; }, get playing() { return playing; }, get mic() { return mic; } };
 }
+for (const playing of [true, false]) {
+  test(`background keeps the episode ${playing ? 'playing' : 'paused'} and stops only voice`, async () => {
+    const s = setup();
+    const lifecycle = new ForegroundVoice(s.controller);
+    try {
+      lifecycle.changed('active'); await delay();
+      await s.controller.submit('play Lenny'); s.seek(123.375);
+      if (!playing) await s.controller.submit('pause');
+      let reloads = 0; s.ports.audio.load = async () => { reloads++; };
+      lifecycle.changed('background'); await delay();
+      assert.equal(s.mic, false); assert.equal(s.playing, playing);
+      assert.equal(s.position, 123.375); assert.equal(s.controller.state.episode?.id, episode.id);
+      const requests = s.questions.length;
+      s.controller.final('Hey Murmur, explain that', 'background');
+      await s.controller.submit('play Lenny');
+      assert.equal(s.questions.length, requests); assert.equal(reloads, 0);
+      lifecycle.changed('active'); await delay();
+      assert(s.mic); assert.equal(s.playing, playing); assert.equal(s.position, 123.375);
+      assert.equal(s.controller.state.phase, playing ? 'playing' : 'paused');
+      assert.equal(reloads, 0);
+    } finally { await lifecycle.dispose(); }
+  });
+}
+test('remote playback and seeking supersede the old conversation bookmark on reopen', async () => {
+  const s = setup();
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(100);
+    await s.controller.submit('Explain that');
+    await s.controller.suspendVoice();
+    s.seek(250.75); s.ports.audio.play(); s.controller.playbackChanged(true);
+    await s.controller.activate();
+    assert(s.playing); assert.equal(s.position, 250.75);
+    s.controller.final('Hey Murmur, explain this', 'fresh-wake'); await delay();
+    await s.controller.submit('back to the podcast');
+    assert.equal(s.position, 250.75); assert(s.playing);
+    await s.controller.suspendVoice();
+    s.ports.audio.pause(); s.seek(310); s.controller.playbackChanged(false);
+    await s.controller.activate();
+    assert(!s.playing); assert.equal(s.controller.state.phase, 'paused');
+    await s.controller.submit('back to the podcast');
+    assert.equal(s.position, 310); assert(s.playing);
+  } finally { await s.controller.dispose(); }
+});
+test('late question results cannot speak or start playback after backgrounding', async () => {
+  const s = setup();
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(125);
+    const resolve = s.ports.api.resolve;
+    let release!: () => void;
+    s.ports.api.resolve = async (...args) => { await new Promise<void>((done) => { release = done; }); return resolve(...args); };
+    const pending = s.controller.submit('Explain that'); await delay();
+    await s.controller.suspendVoice(); const spoken = s.spoken.length;
+    release(); await pending;
+    assert(!s.mic); assert(!s.playing); assert.equal(s.spoken.length, spoken);
+    assert.equal(s.position, 125); assert.equal(s.controller.state.episode?.id, episode.id);
+  } finally { await s.controller.dispose(); }
+});
+test('background completion is silent and does not restart when reopened', async () => {
+  const s = setup();
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny');
+    await s.controller.suspendVoice(); const spoken = s.spoken.length;
+    s.seek(1000); s.ports.audio.pause(); await s.controller.ended();
+    assert.equal(s.spoken.length, spoken);
+    await s.controller.activate();
+    assert.equal(s.position, 1000); assert(!s.playing); assert(s.mic);
+  } finally { await s.controller.dispose(); }
+});
+test('voice reconnection failure leaves the background podcast and position intact', async () => {
+  const s = setup();
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(155);
+    await s.controller.suspendVoice();
+    s.ports.microphone.start = async () => { throw new Error('Voice connection unavailable'); };
+    await s.controller.activate();
+    assert(s.playing); assert.equal(s.position, 155); assert(!s.mic);
+    assert.equal(s.controller.state.episode?.id, episode.id);
+    assert.match(s.controller.state.error!, /Voice connection unavailable/);
+  } finally { await s.controller.dispose(); }
+});
+test('native pause notifications during a command do not change its resume intent', async () => {
+  const s = setup();
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(25);
+    const pause = s.ports.audio.pause;
+    s.ports.audio.pause = () => { pause(); s.controller.playbackChanged(false); };
+    await s.controller.submit('skip ad');
+    assert(s.playing); assert.equal(s.position, 40);
+  } finally { await s.controller.dispose(); }
+});
+test('native completion after its paused notification still offers the next episode once', async () => {
+  const s = setup();
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny');
+    s.seek(1000); s.ports.audio.pause(); s.controller.playbackChanged(false);
+    await s.controller.ended(); await s.controller.ended();
+    assert.equal(s.spoken.filter((text) => text.includes('end of the episode')).length, 1);
+    assert.equal(s.controller.state.phase, 'followup');
+  } finally { await s.controller.dispose(); }
+});
 test('wake phrase requires an explicit Hey Murmur and preserves the following request', () => {
   assert.equal(wakeRequest('People sometimes murmur about pricing.'), undefined);
   assert.equal(wakeRequest('podcast background. Hey, Murmur! What did she mean?'), 'What did she mean?');
@@ -378,6 +479,8 @@ test('a failed device seek is never acknowledged as a successful ad skip', async
     s.ports.audio.seek = async () => { throw new Error('Could not seek'); };
     s.ports.api.acknowledge = async (session) => { acknowledgements++; return session; };
     await s.controller.submit('skip ad'); assert.equal(acknowledgements, 0); assert(!s.playing); assert(!s.mic);
-    assert.equal(s.controller.state.phase, 'error'); assert(!s.spoken.includes('Ad skipped. Back to Lenny.'));
+    assert.equal(s.controller.state.phase, 'paused'); assert.match(s.controller.state.error!, /Could not seek/);
+    assert.equal(s.position, 25); assert.equal(s.controller.state.episode?.id, episode.id);
+    assert(!s.spoken.includes('Ad skipped. Back to Lenny.'));
   } finally { await s.controller.dispose(); }
 });

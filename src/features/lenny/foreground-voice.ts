@@ -1,6 +1,6 @@
 type ForegroundVoicePorts = {
   activate(): Promise<void>;
-  shutdown(): Promise<void>;
+  suspendVoice(): Promise<void>;
   dispose(): Promise<void>;
   fail(error: unknown): Promise<void>;
 };
@@ -19,7 +19,7 @@ export class ForegroundVoice {
       if (!this.foreground) return;
       this.foreground = false;
       this.generation++;
-      this.cleanup = Promise.all([this.cleanup, this.voice.shutdown()])
+      this.cleanup = Promise.all([this.cleanup, this.voice.suspendVoice()])
         .then(() => undefined)
         .catch(async (error) => { await this.voice.fail(error).catch(() => undefined); });
       return;
