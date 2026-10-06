@@ -2,6 +2,61 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { backendConfig } from './config';
 import { createCatalogInterpreter } from './catalog-interpreter';
+import { createDatabase } from './database';
+import { Repository } from './repository';
+import { askChoices } from '../src/server/typesafe/client';
+
+test('current-episode routing combines probability only for equivalent current and resume destinations', async () => {
+  const config = backendConfig(); config.providers.typesafe.apiKey = 'test-only';
+  const interpret = createCatalogInterpreter(config.providers.typesafe, async (_state, questions) => Object.fromEntries(
+    Object.entries(questions).map(([key, question]) => {
+      const choice = key === 'action' ? 'resume' : Object.keys(question.criteria)[0]!;
+      const probabilities = Object.fromEntries(Object.keys(question.criteria).map((option) => [option,
+        key === 'action' ? ({ resume: 0.73, current: 0.11, unclear: 0.15, choose: 0.01 } as Record<string, number>)[option] ?? 0 : Number(option === choice)]));
+      return [key, { choice, confidence: 0.68, probabilities }];
+    }),
+  ));
+  const context = { utterance: 'Pick up from there', history: [], episodes: [{ id: 'brian', title: 'Brian', showTitle: 'Lenny', guest: 'Brian', description: '' }] };
+  assert.equal((await interpret({ ...context, currentEpisodeId: 'brian' }, new AbortController().signal)).kind, 'resume');
+  assert.equal((await interpret(context, new AbortController().signal)).kind, 'clarify');
+});
+
+test('live catalog routing separates returning to playback from continuing a discussion', { skip: process.env.MURMUR_LIVE_SEMANTICS !== '1' }, async () => {
+  const config = backendConfig();
+  const pool = createDatabase(config.databaseUrl);
+  const catalog = await new Repository(pool, config).catalog().finally(() => pool.end());
+  const episodes = catalog.map(({ id, title, showTitle, guest, description }) => ({ id, title, showTitle, guest, description }));
+  const currentEpisodeId = episodes.find((episode) => episode.guest === 'Brian Halligan')!.id;
+  const history = [
+    'what does he mean by that?',
+    'He means a good CEO is never fully satisfied with the current state, even when things are going well. It’s not complaining; it’s staying slightly uncomfortable so you keep pushing toward the bigger goal. The nuance is that the dissatisfaction is constructive, so it drives progress without turning into pessimism.',
+    'Could you give me a concrete example?',
+    'Hypothetical: a company just hit its quarterly target, but the CEO still says, “Good—now how do we cut onboarding time in half and make the product stickier?” That’s the tension: celebrating the win without settling into it. The useful implication is to treat success as a checkpoint, not a finish line.',
+  ];
+  let action: unknown;
+  const interpret = createCatalogInterpreter(config.providers.typesafe, async (state, questions, options) => {
+    const answers = await askChoices(state, questions, options);
+    action = Object.entries(answers).find(([key]) => key === 'action')?.[1];
+    return answers;
+  });
+  const cases = [
+    ['Take me back to the podcast now', 'resume'],
+    ['Let’s hear the rest of the episode', 'resume'],
+    ['Enough explanation, carry on with the recording', 'resume'],
+    ['Could you continue explaining that example?', 'current'],
+    ['Tell me more about the podcast guest’s point', 'current'],
+    ['Take me back to the home screen', 'home'],
+    ['End this episode', 'home'],
+    ['Play this episode from the beginning', 'current'],
+    ['Play the Benedict Evans episode instead', 'select'],
+  ] as const;
+  for (let round = 0; round < Number(process.env.MURMUR_LIVE_SEMANTIC_ROUNDS ?? 1); round++) {
+    for (const [utterance, expected] of cases) {
+      const result = await interpret({ utterance, currentEpisodeId, history, episodes }, new AbortController().signal);
+      assert.equal(result.kind, expected, `${utterance}: ${JSON.stringify(action)}`);
+    }
+  }
+});
 
 test('live catalog routing separates ending an episode from disabling voice', { skip: process.env.MURMUR_LIVE_SEMANTICS !== '1' }, async () => {
   const interpret = createCatalogInterpreter(backendConfig().providers.typesafe);
