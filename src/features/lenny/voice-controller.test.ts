@@ -171,7 +171,19 @@ test('a resolution error after accepted wake leaves playback paused', async () =
     assert(!s.playing); assert.equal(s.position, 91); assert(!s.mic);
   } finally { await s.controller.dispose(); }
 });
-test('background during confirmation cancels pause and restores podcast volume', async () => {
+test('a skip interrupting an unfinished pause confirmation preserves original playing intent', async () => {
+  const s = setup(1000); let release!: () => void;
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(25);
+    s.ports.speech.say = () => new Promise<void>((resolve) => { release = resolve; });
+    const pause = s.controller.submit('pause'); await delay(); assert(!s.playing);
+    s.ports.speech.say = async () => {};
+    s.controller.final('Hey Murmur skip ad', 'replacement'); await delay();
+    assert(s.playing); assert.equal(s.position, 40);
+    release(); await pause; assert(s.playing);
+  } finally { await s.controller.dispose(); }
+});
+test('background during confirmation cancels the command and restores original playback', async () => {
   const s = setup(1000); let release!: () => void; const duck: boolean[] = [];
   try {
     await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(20);
@@ -193,7 +205,7 @@ test('bare detail wake settles on silence without changing playback or accepting
     s.controller.final('podcast speech', 'ambient'); await delay(); assert.deepEqual(s.questions, []);
   } finally { await s.controller.dispose(); }
 });
-test('unanswered detail clarification restores volume and wake gating after silence', async () => {
+test('unanswered detail clarification restores playback and wake gating after silence', async () => {
   const s = setup(10); const duck: boolean[] = [];
   try {
     await s.controller.activate(); await s.controller.submit('play Lenny');
@@ -230,7 +242,7 @@ test('end confirms before clearing and returns to home with microphone available
     assert.equal(s.controller.state.phase, 'followup');
   } finally { await s.controller.dispose(); }
 });
-test('background during collection restores volume without pausing and rejects the late final', async () => {
+test('background during collection restores playback and rejects the late final', async () => {
   const s = setup(1000); const duck: boolean[] = [];
   try {
     await s.controller.activate(); await s.controller.submit('play Lenny');
@@ -586,7 +598,7 @@ test('a corrected final wake transcript interrupts playback even when its partia
     s.controller.partial('Hey', 'corrected-wake');
     assert(s.playing);
     s.controller.final('Hey Murmur, explain that', 'corrected-wake');
-    assert(s.playing);
+    assert(!s.playing);
     await delay();
     assert(!s.playing);
     assert.deepEqual(s.questions, ['explain that']);
@@ -901,7 +913,7 @@ test('a wake interruption during a device seek observes its completed destinatio
     const skip = s.controller.submit('skip ad'); await delay();
     s.controller.partial('Hey Murmur, explain that', 'interrupt-seek');
     release(); await skip; await delay();
-    assert.equal(s.position, 40); assert(s.playing);
+    assert.equal(s.position, 40); assert(!s.playing);
     assert.equal((await s.ports.api.session('session')).positionSeconds, 40);
     s.controller.final('Hey Murmur, explain that', 'interrupt-seek'); await delay();
     assert.equal((await s.ports.api.session('session')).bookmarkSeconds, 40);
