@@ -10,7 +10,12 @@ export function MurmurMascot({ size, phase, reducedMotion, level = 0 }: Props) {
   const blink = useSharedValue(1);
   const breath = useSharedValue(0);
   const voice = useSharedValue(0);
+  const attention = useSharedValue(0);
   const attentive = phase === 'listening' || phase === 'followup';
+  useEffect(() => {
+    attention.value = withTiming(attentive ? 1 : 0, { duration: reducedMotion ? 0 : 350 });
+    return () => cancelAnimation(attention);
+  }, [attention, attentive, reducedMotion]);
   useEffect(() => {
     if (!reducedMotion) {
       blink.value = withRepeat(withSequence(withDelay(3700, withTiming(0.08, { duration: 110 })), withTiming(1, { duration: 170 })), -1);
@@ -23,7 +28,7 @@ export function MurmurMascot({ size, phase, reducedMotion, level = 0 }: Props) {
     voice.value = withTiming(phase === 'speaking' && !reducedMotion ? Math.min(1, Math.max(0, level)) : 0, { duration: 95 });
     return () => cancelAnimation(voice);
   }, [phase, reducedMotion, voice, level]);
-  const bodyStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -breath.value * 5 }, { rotate: `${attentive ? -2 : 0}deg` }] }));
+  const bodyStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -breath.value * 5 }, { rotate: `${attention.value * (-2 + breath.value * 0.7)}deg` }] }));
   const eyeStyle = useAnimatedStyle(() => ({ transform: [{ scaleY: blink.value }] }));
   const mouthStyle = useAnimatedStyle(() => ({ height: size * (0.013 + voice.value * 0.019), width: size * (0.105 - voice.value * 0.018), backgroundColor: voice.value > 0.12 ? '#49382D' : 'transparent', transform: [{ rotate: '-12deg' }] }));
   return <View accessible accessibilityLabel={`Murmur, ${phase}`} style={{ width: size, height: size }}>

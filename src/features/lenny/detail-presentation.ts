@@ -17,7 +17,7 @@ export function detailPresentation(state: VoiceState): DetailPresentation {
   const error = Boolean(state.error) || state.phase === 'error';
   const speaking = state.phase === 'speaking' && state.speechPlaying;
   return {
-    voiceStatus: error ? state.microphone ? 'Ready to retry' : 'Connection interrupted' : !state.microphone ? 'Mic off' : speaking ? 'Speaking' : phaseStatus[state.phase],
+    voiceStatus: error ? state.microphone ? 'Ready to retry' : 'Connection interrupted' : !state.microphone ? 'Mic off' : speaking ? 'Speaking' : state.followupOpen ? 'Listening' : phaseStatus[state.phase],
     playbackStatus: state.phase === 'playing' ? 'Playing' : state.phase === 'paused' ? 'Paused' : undefined,
     heard: state.heard,
     reply: error ? state.error || state.caption : speaking ? state.caption : '',

@@ -5,6 +5,13 @@ import type { VoicePhase, VoiceState } from './voice-controller';
 
 const state: VoiceState = { phase: 'playing', microphone: true, caption: 'Old reply', heard: 'Hey Murmur, pause' };
 
+test('paused conversation displays Listening without claiming podcast playback', () => {
+  const presentation = detailPresentation({ ...state, phase: 'paused', followupOpen: true });
+  assert.equal(presentation.voiceStatus, 'Listening');
+  assert.equal(presentation.playbackStatus, 'Paused');
+  assert.equal(detailPresentation({ ...state, phase: 'paused', followupOpen: true, microphone: false }).voiceStatus, 'Mic off');
+});
+
 test('detail retains recognized input through the entire conversation and paused acknowledgement', () => {
   for (const phase of ['listening', 'thinking', 'speaking', 'followup', 'paused', 'playing'] satisfies VoicePhase[]) {
     assert.equal(detailPresentation({ ...state, phase }).heard, state.heard);

@@ -22,7 +22,7 @@ export function InvocationStage({ state, playbackEntered = false, seconds = 0, c
   const insets = useSafeAreaInsets();
   const { width, height, fontScale } = useWindowDimensions();
   const reducedMotion = useReducedMotion();
-  const listening = state.phase === 'listening' || state.phase === 'followup';
+  const listening = state.microphone && (state.phase === 'listening' || state.phase === 'followup' || Boolean(state.followupOpen));
   const playback = Boolean(state.episode && playbackEntered);
   const detail = detailPresentation(state);
   const transition = useSharedValue(playback ? 1 : 0);
@@ -53,7 +53,7 @@ export function InvocationStage({ state, playbackEntered = false, seconds = 0, c
         {!playback ? <Animated.View style={{ width: '100%', flexShrink: 0 }} entering={reducedMotion ? undefined : FadeIn.duration(200)} exiting={reducedMotion ? undefined : FadeOut.duration(200)}>
           <Text style={styles.title}>What would you like to hear?</Text>
         </Animated.View> : null}
-        <Animated.View layout={reducedMotion ? undefined : LinearTransition.duration(250)} style={[styles.mascot, { width: mascotSize }, mascotSpace]}><Animated.View style={mascotMotion}><MurmurMascot size={mascotSize} phase={state.speechPlaying ? 'speaking' : state.phase === 'speaking' ? 'thinking' : state.phase} level={state.speechLevel} reducedMotion={reducedMotion} /></Animated.View></Animated.View>
+        <Animated.View layout={reducedMotion ? undefined : LinearTransition.duration(250)} style={[styles.mascot, { width: mascotSize }, mascotSpace]}><Animated.View style={mascotMotion}><MurmurMascot size={mascotSize} phase={state.speechPlaying ? 'speaking' : listening ? 'listening' : state.phase === 'speaking' ? 'thinking' : state.phase} level={state.speechLevel} reducedMotion={reducedMotion} /></Animated.View></Animated.View>
         {playback ? <View testID="detail-voice" style={styles.detailVoice}>
           <View style={styles.labelRow}><View style={[styles.dot, { backgroundColor: detail.error ? '#A36648' : state.microphone ? '#7B876C' : '#B8A990' }]} /><Text testID="detail-voice-status" accessibilityLabel={`Voice: ${detail.voiceStatus}`} style={styles.label}>{detail.voiceStatus}</Text></View>
           {detail.heard ? <Text testID="detail-heard" selectable numberOfLines={2} accessibilityLabel={`You said: ${detail.heard}`} style={[styles.transcript, styles.playbackHeard]}>“{detail.heard}”</Text> : null}

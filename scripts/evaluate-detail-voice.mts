@@ -177,7 +177,8 @@ try {
       position = 123.375;
       await utter(`${guest}: detail pause`, 'Hey Murmur, pause the podcast', 'paused');
       assert(!playing); assert.equal(position, 123.375);
-      await utter(`${guest}: resume`, 'Hey Murmur, continue where we left off', 'playing');
+      assert(controller.state.followupOpen);
+      await utter(`${guest}: unprefixed resume`, 'Continue where we left off', 'playing');
       assert(playing); assert.equal(position, 123.375);
       await utter(`${guest}: end`, 'Hey Murmur, end this episode', 'followup');
       assert(!controller.state.episode); assert(!playing); assert(controller.state.microphone);
