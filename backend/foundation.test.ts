@@ -160,6 +160,17 @@ test('PostgreSQL, preparation jobs, and authenticated listening work together', 
       assert.equal((await app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/acknowledgements`, headers: headers(user.token), payload: ack })).statusCode, 409);
       assert.equal((await app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/turns`, headers: headers(user.token), payload: returnInput })).statusCode, 409);
     });
+    await t.test('pause acknowledgement records the actual stop after spoken confirmation without relaxing seek precision', async () => {
+      const user = await guest(); let session = await open(user.token);
+      session = await repository.observe(user.id, session.id, { ...session, reason: 'interrupt', positionSeconds: 18 });
+      const response = await app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/turns`, headers: headers(user.token), payload: turnInput(session, 'pause') });
+      assert.equal(response.statusCode, 200, response.body);
+      const result = response.json(); assert.equal(result.action.kind, 'pause');
+      const ack = { revision: result.session.revision, audioVersion: session.audioVersion, actionId: result.action.id, positionSeconds: 25 };
+      await assert.rejects(repository.acknowledge(user.id, session.id, { ...ack, positionSeconds: 10 }));
+      session = await repository.acknowledge(user.id, session.id, ack);
+      assert.equal(session.positionSeconds, 25); assert.equal(session.phase, 'paused');
+    });
     await t.test('API restart restores the session and private history from PostgreSQL', async () => {
       const user = await guest(); const session = await open(user.token);
       await repository.observe(user.id, session.id, { ...session, positionSeconds: 31.5, reason: 'play' });

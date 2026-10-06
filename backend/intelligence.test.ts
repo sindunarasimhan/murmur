@@ -55,3 +55,50 @@ test('continue inside a conversation reaches semantic interpretation instead of 
   assert.equal((await intelligence.decide({ utterance: 'Continue the podcast', session, evidence: [], history }, new AbortController().signal)).kind, 'play');
   assert.equal(calls, 1);
 });
+
+test('semantic playback has one resume outcome rather than competing play and return labels', async () => {
+  const config = backendConfig(); config.providers.typesafe.apiKey = 'test-only';
+  const choices: typeof askChoices = async <K extends string>(_state: unknown, questions: Record<K, ChoiceQuestion>) => {
+    assert(!('return' in questions['action' as K].criteria));
+    return Object.fromEntries(Object.entries<ChoiceQuestion>(questions).map(([key, question]) => {
+      const selected = key === 'action' ? 'play' : key === 'passage' ? 'none' : 'unspecified';
+      return [key, { choice: selected, confidence: 1, probabilities: Object.fromEntries(Object.keys(question.criteria).map((option) => [option, option === selected ? 1 : 0])) }];
+    })) as Record<K, ChoiceAnswer>;
+  };
+  const decision = await createIntelligence(config, choices).decide({ utterance: 'Pick up where we left off', session, evidence: [], history: [] }, new AbortController().signal);
+  assert.equal(decision.kind, 'play');
+  assert.equal(decision.source, 'jev');
+  assert.equal(playbackAction(decision, session, 4477)?.positionSeconds, session.bookmarkSeconds);
+});
+
+test('live semantic commands resolve against the prepared podcast and conversation context', { skip: process.env.MURMUR_LIVE_SEMANTICS !== '1' }, async () => {
+  const { Pool } = await import('pg');
+  const { Repository } = await import('./repository');
+  const config = backendConfig();
+  const pool = new Pool({ connectionString: config.databaseUrl });
+  try {
+    const repository = new Repository(pool, config);
+    const episode = await repository.episode('lenny-brian-halligan');
+    const current: ListeningSession = { ...session, audioVersion: episode.audioVersion, phase: 'resolving', positionSeconds: 270.375, bookmarkSeconds: 270.375 };
+    const intelligence = createIntelligence(config);
+    const cases = [
+      { utterance: 'continue where we left off', expected: 'play' },
+      { utterance: 'Pick up from there', expected: 'play' },
+      { utterance: 'Could you get the podcast going again', expected: 'play' },
+      { utterance: 'Let us get back to the podcast', expected: 'play', explanation: true },
+      { utterance: 'Could you pause this for a moment', expected: 'pause' },
+      { utterance: 'Run it from the top', expected: 'seek' },
+      { utterance: 'Can you explain what he meant by that', expected: 'explain' },
+      { utterance: 'Tell me more about that tradeoff', expected: 'deeper', explanation: true },
+    ];
+    for (const item of cases) {
+      const evidence = await repository.evidence(current, item.utterance);
+      const history = item.explanation ? [{ question: 'Explain that tradeoff', answer: 'The tradeoff is faster growth versus retaining control.' }] : [];
+      const decision = await intelligence.decide({ utterance: item.utterance, session: current, evidence, history }, new AbortController().signal);
+      assert.equal(decision.kind, item.expected, item.utterance);
+      assert.equal(decision.source, 'jev', item.utterance);
+      if (decision.kind === 'play') assert.equal(playbackAction(decision, current, episode.durationSeconds)?.positionSeconds, 270.375);
+      if (decision.kind === 'seek') assert.equal(decision.position, 0);
+    }
+  } finally { await pool.end(); }
+});
