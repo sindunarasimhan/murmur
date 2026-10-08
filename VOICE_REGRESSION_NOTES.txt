@@ -1,0 +1,39 @@
+Murmur voice regression investigation — 2026-10-08
+
+User-reported behavior
+- Premature channel closing improved in the latest phone test.
+- Detail-page input remains unreliable via mascot tap and also reportedly via
+  wake phrase. Intended: "play from the beginning". Displayed: "just let beginning".
+  Response asked which podcast to play instead of helping within the episode.
+
+Established evidence, not a root-cause claim
+- Microphone PCM conversion, silence threshold, eight-second forced commits,
+  provider transcription configuration, and voice processing were not changed
+  by the isolated reconnect repair. The current native checkpoint makes future
+  comparisons possible; it is not a verified last-known-good phone build.
+- Tap pauses playback but has no audio-buffer reset or pending-transcript
+  boundary. Contamination by earlier audio is a hypothesis requiring reproduction.
+- The catalog clarification helper defaults to asking for a show/guest/topic,
+  even when a current episode is supplied and the input is unintelligible.
+- A separate stored request, "Move to like ten minutes", was received correctly
+  but rejected downstream. Three live probes reproduced seek-mode uncertainty,
+  while action and time-target judgments were strong. This is not accent evidence.
+- Server logs contain transcript lengths, not the original microphone recording;
+  they cannot establish what audio reached transcription for the reported phrase.
+
+Engineering lessons and acceptance gates
+- Separate capture, segmentation, transcription, routing, and execution failures.
+  Do not label them all accent problems or infer a cause from empty transcripts.
+- Do not hardcode misheard phrases or relax confidence thresholds to hide errors.
+- Establish a last-known-good build and exact device build before comparison.
+- Preserve the user's natural wording, pauses, corrections, and pace in evaluation.
+  Generated speech is a useful regression check, not proof of accent recognition.
+- Exercise home and detail separately: tap, wake phrase, before/after playback,
+  repeated turns, renewal, interruption, pause/resume, and background/foreground.
+- Introduce only a reproduced, scoped correction. Do not bundle unrelated cleanup.
+- Record failing evidence before changing behavior; distinguish source changes,
+  simulator test results, installed phone build, and user-confirmed quality.
+
+Status
+Recognition regression unresolved. No recognition settings, model, thresholds,
+or phrase-matching rules changed during this investigation.
