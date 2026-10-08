@@ -1,0 +1,36 @@
+Time seek extension — 2026-10-08
+
+Scope: backend time interpretation only. No native UI, microphone, player,
+ad-boundary, intro-boundary, or session lifecycle implementation changes.
+
+Time amounts are parsed from source text (seconds/minutes/hours, decimal and
+spoken numbers, fractions, compound durations, timestamps). Existing exact
+transport shortcuts remain; other wording uses Jev to select a candidate amount
+and relative forward/backward or absolute mode. No ten-minute limit. Existing
+playbackAction clamps to episode bounds; ListeningService preserves prior play
+state through resumeAfterAction.
+
+Failure reproduced: "Please move back two minutes." produced no time candidate
+because a terminal full stop was rejected by the candidate boundary. Jev was
+therefore never offered a seek action. Fixed punctuation handling with a direct
+regression; thresholds unchanged.
+
+Verification:
+- TypeScript typecheck and lint passed.
+- Existing app unit suite: 315 passed, zero failures.
+- Backend suite: 45 passed, 8 opt-in live checks skipped, zero failures.
+- Live intent + seek checks: 15 passed, zero skipped/failures.
+- Repeated focused live run: 9 passed, zero skipped/failures.
+- Each live seek run included 16 catalog -> turn -> acknowledgement sequences
+  across two ready catalog entries, playing and paused, forward/backward,
+  relative/absolute, and episode bounds.
+- Each audio run synthesized three requests and sent MP3s through OpenAI file
+  transcription before intent resolution: 30 seconds forward, two minutes back,
+  one and a half hours forward. Both post-fix runs passed.
+
+Limits: generated MP3 tests do not exercise the phone microphone, Realtime PCM
+transport, native playback, or speaker acoustics. No new physical-phone test or
+native end-to-end test was performed for this backend-only change. Ready for a
+phone check; not represented as device-verified.
+
+Design reference: https://docs.typesafe.ai/cookbooks/pre_parsed_value_extraction_cookbook

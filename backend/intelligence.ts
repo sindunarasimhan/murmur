@@ -5,16 +5,9 @@ import { requestOpenAIExploreAnswer } from '../src/server/exploration/openai-res
 import { EXPLORE_SYSTEM_INSTRUCTIONS } from '../src/server/exploration/explore-prompt';
 import type { BackendConfig } from './config';
 import { ServiceError } from './errors';
+import { exactTimeSeek, timeCandidates } from './time-seek';
 
 export type Decision = { kind: 'explain' | 'deeper' | 'play' | 'pause' | 'return' | 'seek' | 'topic' | 'skip-ad' | 'skip-intro' | 'unclear'; source: 'code' | 'jev' | 'unavailable'; delta?: number; position?: number; passageId?: string };
-function spokenNumber(value: string): number {
-  if (/^\d{1,3}$/.test(value)) return Number(value);
-  const small = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
-  if (small.includes(value)) return small.indexOf(value);
-  const tens: Record<string, number> = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
-  const [first, second, extra] = value.split(/[ -]/);
-  return tens[first!] && !extra && (!second || small.indexOf(second) > 0 && small.indexOf(second) < 10) ? tens[first!]! + (second ? small.indexOf(second) : 0) : NaN;
-}
 export function exactCommand(utterance: string): Decision | undefined {
   const text = utterance.toLowerCase().trim().replace(/[.!?]+$/, '');
   if (/^(?:please )?(?:return|go back|back) to (?:the )?(?:podcast|episode)$/.test(text)) return { kind: 'return', source: 'code' };
@@ -22,16 +15,8 @@ export function exactCommand(utterance: string): Decision | undefined {
   if (/^(?:please )?(?:pause|stop)(?: (?:the )?(?:podcast|episode))?$/.test(text)) return { kind: 'pause', source: 'code' };
   if (/^(?:please )?skip (?:this |the |current )?(?:ads?|advertisement|sponsor(?:ship)?(?: message)?|commercial)(?: please)?$/.test(text)) return { kind: 'skip-ad', source: 'code' };
   if (/^(?:please )?(?:start (?:over|again|from (?:the )?beginning)|restart(?: (?:the )?(?:episode|podcast))?)$/.test(text)) return { kind: 'seek', source: 'code', position: 0 };
-  const absolute = text.match(/^(?:please )?(?:go|jump|skip) to (?:(\d{1,2}):(\d{2})|([\w -]+) (seconds?|minutes?))$/);
-  if (absolute) {
-    const position = absolute[1] ? Number(absolute[1]) * 60 + Number(absolute[2]) : spokenNumber(absolute[3]!) * (absolute[4]!.startsWith('minute') ? 60 : 1);
-    if (Number.isFinite(position) && position >= 0 && position <= 86_400 && (!absolute[2] || Number(absolute[2]) < 60)) return { kind: 'seek', source: 'code', position };
-  }
-  const seek = text.match(/^(?:please )?(?:go |skip |jump |rewind )?(back|backward|forward|ahead) ([\w -]+) (seconds?|minutes?)$/);
-  if (seek) {
-    const amount = spokenNumber(seek[2]!) * (seek[3]!.startsWith('minute') ? 60 : 1);
-    if (amount > 0 && amount <= 600) return { kind: 'seek', source: 'code', delta: amount * (seek[1]!.startsWith('back') ? -1 : 1) };
-  }
+  const seek = exactTimeSeek(text);
+  if (seek) return { kind: 'seek', source: 'code', ...seek };
   return undefined;
 }
 const actionQuestion: ChoiceQuestion = {
@@ -61,8 +46,26 @@ export function createIntelligence(config: BackendConfig, choices: typeof askCho
       if (exact && !contextualContinue) return exact;
       const { typesafe } = config.providers;
       if (!typesafe.apiKey) throw new ServiceError(503, 'decision_unavailable', 'Voice interpretation is unavailable right now. Playback controls still work.');
-      const answers = await choices(input, {
-        action: actionQuestion,
+      const times = timeCandidates(input.utterance);
+      const timeQuestions: Record<string, ChoiceQuestion> = times.length ? {
+        timeTarget: {
+          type: 'choice',
+          instructions: 'Assuming the listener requests a time seek, select the complete time amount they want from `timeCandidates`. These are parsed spans of their utterance, not episode content. Respect corrections and negations; select none for ambiguous alternatives or no matching amount.',
+          criteria: { ...Object.fromEntries(times.map((time, index) => [`time_${index}`, `${time.text}: ${time.seconds} seconds`])), none: 'No single candidate captures the requested time.' },
+        },
+        seekMode: {
+          type: 'choice',
+          instructions: 'Assuming a time seek is requested, distinguish a relative movement from an absolute timestamp. Skip an amount without a direction means forward. Questions about content, negated requests and ambiguous directions are not seeks.',
+          criteria: { forward: 'Move forward BY the amount from the current playback position.', backward: 'Move backward BY the amount from the current playback position.', absolute: 'Move TO the specified timestamp measured from the episode beginning.', none: 'Not a clear time seek.' },
+        },
+      } : {};
+      const answers = await choices<string>(times.length ? { ...input, timeCandidates: times } : input, {
+        ...timeQuestions,
+        action: times.length ? {
+          ...actionQuestion,
+          instructions: actionQuestion.instructions.replace('unsupported, numeric seek, or conflicting actions', 'unsupported or conflicting actions'),
+          criteria: { ...actionQuestion.criteria, seek: 'A request to move podcast playback forward or backward by a time amount, or to an absolute timestamp. A polite request such as could you move ahead is a command; a question about what was said at a time is not. Never execute negated or hypothetical requests.' },
+        } : actionQuestion,
         skipTarget: {
           type: 'choice',
           instructions: 'What target is explicitly named in the listener’s `utterance`? Use the utterance, not the retrieved episode content. "This ad" and "that sponsor" explicitly name advertising; "this" alone and "the boring part" do not. This is independent of whether they actually command a skip.',
@@ -80,7 +83,19 @@ export function createIntelligence(config: BackendConfig, choices: typeof askCho
         },
       }, { ...typesafe, apiKey: typesafe.apiKey, timeoutMs: 1800, signal });
       const action = answers.action;
+      if (!action || !answers.skipTarget || !answers.passage) return { kind: 'unclear', source: 'jev' };
       if ((action.probabilities[action.choice] ?? 0) < 0.7 || action.confidence < 0.45) return { kind: 'unclear', source: 'jev' };
+      if (action.choice === 'seek') {
+        const target = answers.timeTarget; const mode = answers.seekMode;
+        const time = times.find((_, index) => target?.choice === `time_${index}`);
+        if (!time || !target || !mode || mode.choice === 'none' ||
+          (target.probabilities[target.choice] ?? 0) < 0.7 || target.confidence < 0.45 ||
+          (mode.probabilities[mode.choice] ?? 0) < 0.7 || mode.confidence < 0.45 ||
+          (mode.choice !== 'absolute' && time.seconds === 0)) return { kind: 'unclear', source: 'jev' };
+        if (mode.choice === 'absolute') return { kind: 'seek', position: time.seconds, source: 'jev' };
+        if (mode.choice === 'forward' || mode.choice === 'backward') return { kind: 'seek', delta: time.seconds * (mode.choice === 'backward' ? -1 : 1), source: 'jev' };
+        return { kind: 'unclear', source: 'jev' };
+      }
       if (action.choice === 'restart') return { kind: 'seek', position: 0, source: 'jev' };
       if (action.choice === 'skip-ad' && (answers.skipTarget.choice !== 'advertisement' || (answers.skipTarget.probabilities.advertisement ?? 0) < 0.85)) return { kind: 'unclear', source: 'jev' };
       if (action.choice === 'skip-intro' && (answers.skipTarget.choice !== 'introduction' || (answers.skipTarget.probabilities.introduction ?? 0) < 0.85)) return { kind: 'unclear', source: 'jev' };
