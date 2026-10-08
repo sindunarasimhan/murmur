@@ -64,6 +64,24 @@ test('ambiguous episodes with the same guest are identified by their distinct ti
   assert(result.message.includes(mars.title)); assert(result.message.includes(sequel.title));
 });
 
+test('an unclear request in an active episode asks about that episode rather than returning to selection', async () => {
+  for (const episodes of [[mars], [mars, design]]) {
+    const catalog = service(episodes, async () => ({ kind: 'clarify', candidateIds: [] }));
+    const result = await catalog.resolve('owner', 'Unclear captured speech', mars.id, [], signal());
+    assert.equal(result.kind, 'clarify');
+    assert.match(result.message, /this episode/i);
+    assert.doesNotMatch(result.message, /which show|guest|topic|would you like to play/i);
+    assert.equal(result.episode, undefined);
+  }
+});
+
+test('detail-page clarification preserves genuine ambiguity between requested episodes', async () => {
+  const catalog = service([mars, design], async () => ({ kind: 'clarify', candidateIds: [mars.id, design.id] }));
+  const result = await catalog.resolve('owner', 'Switch to another episode', mars.id, [], signal());
+  assert(result.message.includes(mars.title));
+  assert(result.message.includes(design.title));
+});
+
 test('resume uses only saved episodes still available in the catalog and does not pick an arbitrary first result', async () => {
   const resume: CatalogInterpreter = async () => ({ kind: 'resume' });
   const selected = await service([mars, design], resume, design).resolve('owner', 'Continue', undefined, [], signal());

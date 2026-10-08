@@ -24,6 +24,9 @@ export class ContinuousVoiceBudget {
     if (event.type === 'input_audio_buffer.commit' && this.buffered >= 4800) {
       this.buffered = 0; return JSON.stringify({ type: event.type });
     }
+    if (event.type === 'input_audio_buffer.clear') {
+      this.buffered = 0; return JSON.stringify({ type: event.type });
+    }
     throw new Error('Unsupported voice message');
   }
 }
@@ -97,7 +100,7 @@ export class ContinuousVoiceGateway {
         upstream = new WebSocket('wss://api.openai.com/v1/realtime', { headers: { Authorization: `Bearer ${credential.clientSecret}` }, handshakeTimeout: 8000, maxPayload: 256 * 1024 });
         upstream.on('open', () => {
           if (closed || socket.readyState !== WebSocket.OPEN) return stop();
-          ready = true; socket.send(JSON.stringify({ type: 'ready' }));
+          ready = true; socket.send(JSON.stringify({ type: 'ready', supportsAudioClear: true }));
           diagnostic('ready');
           // One quota unit per minute; a long wake-word stream cannot evade limits.
           chargeTimer = setInterval(() => {
@@ -117,7 +120,7 @@ export class ContinuousVoiceGateway {
               diagnostic('transcript-final', { characters: typeof event.transcript === 'string' ? event.transcript.length : 0,
                 wake: typeof event.transcript === 'string' && /\bhey[\s,.!?]+mur\s*mur\b/i.test(event.transcript) });
             }
-            if (['conversation.item.input_audio_transcription.delta', 'conversation.item.input_audio_transcription.completed'].includes(event.type)) {
+            if (['input_audio_buffer.committed', 'input_audio_buffer.cleared', 'conversation.item.input_audio_transcription.delta', 'conversation.item.input_audio_transcription.completed'].includes(event.type)) {
               socket.send(JSON.stringify({ type: event.type, item_id: event.item_id, delta: event.delta, transcript: event.transcript }));
             }
           } catch { fail('The voice service returned an unreadable response.'); }

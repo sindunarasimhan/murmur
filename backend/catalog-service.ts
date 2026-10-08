@@ -11,13 +11,15 @@ function play(episode: PreparedEpisode): CatalogResolution {
   return { kind: 'play', episode, message: `${episode.showTitle}. ${detail}` };
 }
 
-function clarification(episodes: PreparedEpisode[], candidateIds: string[] = []): CatalogResolution {
+function clarification(episodes: PreparedEpisode[], candidateIds: string[] = [], current?: PreparedEpisode): CatalogResolution {
   const candidates = [...new Set(candidateIds)]
     .map((id) => episodes.find((episode) => episode.id === id))
     .filter((episode): episode is PreparedEpisode => episode !== undefined);
   let message = 'Which show, guest, or topic would you like to hear?';
   if (candidates.length === 2) {
     message = `Did you mean “${candidates[0]!.title}” or “${candidates[1]!.title}”?`;
+  } else if (current) {
+    message = 'Could you repeat what you would like me to do with this episode?';
   } else if (episodes.length === 1) {
     const episode = episodes[0]!;
     message = `I have “${episode.title}” from ${episode.showTitle}. Would you like to play it?`;
@@ -69,7 +71,7 @@ export class CatalogService {
       case 'cancel':
         return { kind: 'cancel', message: '' };
       case 'clarify':
-        return clarification(episodes, intent.candidateIds);
+        return clarification(episodes, intent.candidateIds, current);
     }
   }
 }

@@ -55,7 +55,7 @@ export function createIntelligence(config: BackendConfig, choices: typeof askCho
         },
         seekMode: {
           type: 'choice',
-          instructions: 'Assuming a time seek is requested, distinguish a relative movement from an absolute timestamp. Skip an amount without a direction means forward. Questions about content, negated requests and ambiguous directions are not seeks.',
+          instructions: 'Assuming a time seek is requested, identify whether the time is a destination or a distance. A request to move TO a time or time mark specifies an absolute destination measured from the episode beginning, not a forward distance. Conversational fillers and punctuation do not change that relationship. A request to move ahead, forward, back or backward BY an amount specifies a relative distance. Skip an amount without a destination or direction means forward. Respect corrections and negations; questions about content and genuinely ambiguous directions are not seeks.',
           criteria: { forward: 'Move forward BY the amount from the current playback position.', backward: 'Move backward BY the amount from the current playback position.', absolute: 'Move TO the specified timestamp measured from the episode beginning.', none: 'Not a clear time seek.' },
         },
       } : {};

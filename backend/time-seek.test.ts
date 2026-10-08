@@ -79,6 +79,9 @@ test('live natural-language seek handles amounts without episode-specific rules'
     ['Can we move ahead an hour and a half', 'delta', 5400],
     ['Please take me to the one hour twenty minutes mark', 'position', 4800],
     ['Move ahead two minutes and thirty seconds please', 'delta', 150],
+    ['Move to, like, ten minutes.', 'position', 600],
+    ['Could you take me to, um, the five minute mark?', 'position', 300],
+    ['Go back, like, two minutes please.', 'delta', -120],
   ] as const;
   for (const [utterance, field, expected] of cases) {
     const result = await intelligence.decide({ utterance, session, evidence: [], history: [] }, new AbortController().signal);

@@ -41,3 +41,19 @@ test('continuous voice permits repeated bounded PCM turns but no provider contro
   assert.throws(() => new ContinuousVoiceBudget(0).accept({ type: append.type, audio: Buffer.alloc(48_000 * 4).toString('base64') }, 1));
   assert.throws(() => new ContinuousVoiceBudget(0).accept({ type: append.type, audio: Buffer.alloc(48_000 * 21).toString('base64') }, 30_000));
 });
+
+test('clearing a voice turn drops buffered audio but does not reset cumulative rate limits', () => {
+  const budget = new ContinuousVoiceBudget(0);
+  const append = { type: 'input_audio_buffer.append', audio: Buffer.alloc(4800).toString('base64') };
+  budget.accept(append, 100);
+  assert.deepEqual(JSON.parse(budget.accept({ type: 'input_audio_buffer.clear' }, 100)), { type: 'input_audio_buffer.clear' });
+  assert.throws(() => budget.accept({ type: 'input_audio_buffer.commit' }, 100));
+  budget.accept(append, 200);
+  budget.accept({ type: 'input_audio_buffer.commit' }, 200);
+  const flooded = new ContinuousVoiceBudget(0);
+  for (let i = 0; i < 30; i++) {
+    flooded.accept(append, 1);
+    flooded.accept({ type: 'input_audio_buffer.clear' }, 1);
+  }
+  assert.throws(() => flooded.accept(append, 1), /budget/);
+});
