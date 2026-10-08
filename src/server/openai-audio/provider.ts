@@ -25,7 +25,7 @@ export async function synthesizeAudio(text: string, options: Options) {
     body: JSON.stringify({
       model: config.speechModel, voice: config.speechVoice, input: text, response_format: 'mp3',
       ...(config.speechModel.startsWith('gpt-4o-mini-tts') ? {
-        instructions: 'Speak warmly and clearly with calm confidence. Keep a thoughtful, conversational pace distinct from podcast audio.',
+        instructions: 'You are Murmur, a warm, easygoing podcast companion. Speak to one person with a gentle smile in your voice, relaxed confidence, and natural conversational inflection. Use an easy, lightly upbeat pace with small pauses at meaningful phrases. Short confirmations should sound casual and reassuring, never like announcements. Explanations should sound curious and thoughtful. Avoid flat robotic cadence, exaggerated cheerfulness, theatrical delivery, and a customer-service tone. Read only the supplied words; do not add greetings, fillers, laughs, or sound effects.',
       } : {}),
     }),
   }, { ...options, timeoutMs: SERVER_BUDGETS.speech }, async (response, signal) => {
