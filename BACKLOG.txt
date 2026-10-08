@@ -1,5 +1,8 @@
 Murmur backlog
 
+Bugs
+====
+
 2026-10-08 — Native playback captions do not update in real time
 Status: deferred, reported by user during physical-iPhone testing.
 The user reported that time skipping and the other tested functionality worked
@@ -10,3 +13,16 @@ Acceptance: displayed podcast captions follow actual playback position during
 normal playback and after a seek, while preserving the user-transcript display
 during voice interaction. Verify on the phone; do not claim word-level timing
 where the source transcript only provides coarse segments.
+
+Ideas
+=====
+
+2026-10-08 — Settings-driven batch transcript and ad-marker preparation
+Status: future idea only; not part of the current implementation scope.
+Offer a setting where the user can change the ad-skipping preference and trigger
+batch preparation/storage of episode transcripts and associated ad markers in
+one operation, with a visible progress spinner or progress indicator.
+Reuse the original recordings and timeline; stored markers enable automatic
+seeks over ads rather than generating edited audio or restarting playback.
+The episode selection scope and preference persistence are future design
+decisions. Do not implement this settings or batch-progress UI now.
