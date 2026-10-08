@@ -34,6 +34,38 @@ Engineering lessons and acceptance gates
 - Record failing evidence before changing behavior; distinguish source changes,
   simulator test results, installed phone build, and user-confirmed quality.
 
-Status
-Recognition regression unresolved. No recognition settings, model, thresholds,
-or phrase-matching rules changed during this investigation.
+Scoped candidate — 2026-10-08
+- Detail-page mascot taps now pause first, clear uncommitted provider audio,
+  retire previous transcription items, and reject queued pre-tap capture frames.
+  Late commit acknowledgements received before the clear acknowledgement are
+  also retired. This does not reconnect the socket or reset playback position.
+- Home listening and wake-plus-command handling are unchanged. Clearing on a
+  wake partial would risk deleting the same utterance's command, so it is not
+  done. Wake-path recognition and real speaker acoustics remain unverified.
+- The gateway advertises buffer-clear support and forwards commit/clear events.
+  Older clients ignore the added events; a newer client against an older server
+  retains its previous capture behavior rather than sending unsupported messages.
+- Unclear current-episode requests now clarify within that episode. Actual
+  ambiguity between episodes still asks which episode. No guessed restart is
+  executed for the reported misheard phrase.
+- Seek interpretation distinguishes destination versus distance despite speech
+  fillers. No probability thresholds, model, recognition settings, or phrase
+  matching rules changed.
+
+Verification
+- Wrong-context clarification and buffer-clear support had failing regressions
+  before their fixes. The conversational seek failure reproduced live first.
+- 55 backend tests and 315 legacy/shared unit tests passed; typecheck passed.
+- The live natural-language seek matrix passed three consecutive runs. The wider
+  15-test intent/seek run, including generated audio and two-episode live backend
+  flows, passed.
+- Native run: 41 tests passed, including home/detail UI, background behavior,
+  capture-boundary cases, and reconnect recovery. The live spoken flow received
+  the home wake and Brian selection, then terminated with SIGTERM. Simulator
+  was shut down when checked afterward. No full spoken-flow pass is claimed.
+- An additional live fixture now queues uncommitted podcast-like audio before
+  tapping and saying "play from the beginning". This expanded fixture still
+  needs execution; it is not evidence yet.
+- No installation or physical-phone quality verification of this candidate has
+  been confirmed. Buffered audio is a demonstrated unsafe handoff, not a proven
+  explanation of the user's original misrecognition without that recording.

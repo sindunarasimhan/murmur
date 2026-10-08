@@ -50,6 +50,24 @@ struct ConversationTests {
         #expect(!model.isListening)
     }
 
+    @Test func onlyDetailTapStartsFreshCaptureAfterPausing() async {
+        let (model, _, player, _) = await setup()
+        var resets = 0
+        model.beginMicrophoneTurn = {
+            #expect(!player.playing)
+            resets += 1
+        }
+        model.tap()
+        #expect(resets == 0)
+        model.submit("Play something"); await model.waitForWork()
+        model.receive("Hey Murmur pause", item: "wake", final: true)
+        await model.waitForWork()
+        #expect(resets == 0)
+        model.tap()
+        #expect(resets == 1)
+        #expect(model.isListening)
+    }
+
     @Test(arguments: [true, false]) func skipPreservesPriorPlayback(playing: Bool) async {
         let (model, _, player, speech) = await setup()
         model.submit("Play"); await model.waitForWork()

@@ -12,6 +12,7 @@ final class NativeVoice {
     private var deadline: Task<Void, Never>?
     private var generation = 0
     private var ready = false
+    private var capturing = true
     private var tapped = false
     private var texts: [String: String] = [:]
     private var bytes = 0
@@ -19,6 +20,9 @@ final class NativeVoice {
     private var bufferStarted = Date()
     private var lastLoud = Date()
     private var sendQueue: Task<Void, Never>?
+    private var boundary = VoiceTurnBoundary()
+    private var supportsAudioClear = false
+    private var clearDeadline: Task<Void, Never>?
     var onTranscript: ((String, String, Bool) -> Void)?
     var onActivity: (() -> Void)?
     var onError: ((Error) -> Void)?
@@ -29,6 +33,7 @@ final class NativeVoice {
 
     private func connect(capture: Bool) async throws {
         stop()
+        capturing = capture
         let epoch = generation
         if capture {
             let granted = await AVAudioApplication.requestRecordPermission()
@@ -67,10 +72,18 @@ final class NativeVoice {
         guard epoch == generation else { throw CancellationError() }
         do { if capture { try startCapture(epoch: epoch) } }
         catch { stop(); throw error }
+        scheduleRenewal(after: .milliseconds(max(1000, ticket.leaseMilliseconds - 10000)), capture: capture, epoch: epoch)
+    }
+
+    private func scheduleRenewal(after delay: Duration, capture: Bool, epoch: Int) {
+        renewal?.cancel()
         renewal = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(max(1000, ticket.leaseMilliseconds - 10000)))
+            do { try await Task.sleep(for: delay) } catch { return }
             guard !Task.isCancelled, let self, self.generation == epoch else { return }
-            do { try await self.connect(capture: capture) } catch { self.onError?(error) }
+            self.renewal = nil
+            do { try await self.connect(capture: capture) }
+            catch is CancellationError { }
+            catch { if !Task.isCancelled { self.onError?(error) } }
         }
     }
 
@@ -86,6 +99,7 @@ final class NativeVoice {
             throw MurmurError(message: "No microphone input is available.")
         }
         input.installTap(onBus: 0, bufferSize: 2048, format: inputFormat) { [weak self] buffer, _ in
+            let capturedAt = ProcessInfo.processInfo.systemUptime
             let capacity = AVAudioFrameCount(ceil(Double(buffer.frameLength) * 24000 / inputFormat.sampleRate) + 16)
             guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else { return }
             var delivered = false
@@ -101,7 +115,7 @@ final class NativeVoice {
             for i in stride(from: 0, to: count, by: 8) { let value = Double(samples[i]) / 32768; sum += value * value }
             let loud = sqrt(sum / Double(max(1, (count + 7) / 8))) > 0.008
             Task { @MainActor in
-                guard let self, self.generation == epoch else { return }
+                guard let self, self.generation == epoch, capturedAt >= self.boundary.captureStart else { return }
                 self.append(data, loud: loud)
             }
         }
@@ -114,17 +128,41 @@ final class NativeVoice {
         let data: Data
         switch message { case .string(let text): data = Data(text.utf8); case .data(let bytes): data = bytes; @unknown default: return }
         guard let event = try JSONSerialization.jsonObject(with: data) as? [String: Any], let type = event["type"] as? String else { return }
-        if type == "ready" { ready = true; deadline?.cancel(); readiness?.resume(); readiness = nil }
+        if type == "ready" {
+            supportsAudioClear = event["supportsAudioClear"] as? Bool == true
+            ready = true; deadline?.cancel(); readiness?.resume(); readiness = nil
+        }
+        else if type == "input_audio_buffer.cleared" {
+            boundary.cleared()
+            if !boundary.clearing { clearDeadline?.cancel() }
+        }
         else if type == "error" { throw MurmurError(message: event["message"] as? String ?? "The voice service is unavailable.") }
         else if type == "renew" {
-            Task { [weak self] in do { try await self?.start() } catch { self?.onError?(error) } }
+            scheduleRenewal(after: .zero, capture: capturing, epoch: generation)
         } else if let id = event["item_id"] as? String {
+            if type == "input_audio_buffer.committed" { boundary.committed(id); return }
+            let final = type.hasSuffix(".completed")
+            guard boundary.accepts(id, final: final) else { texts.removeValue(forKey: id); return }
             if type.hasSuffix(".delta"), let delta = event["delta"] as? String {
                 let text = String(((texts[id] ?? "") + delta).suffix(6000))
                 texts[id] = text; onTranscript?(text, id, false)
             } else if type.hasSuffix(".completed"), let text = event["transcript"] as? String {
                 texts.removeValue(forKey: id); onTranscript?(text, id, true)
             }
+        }
+    }
+
+    func beginTappedTurn() {
+        guard ready, supportsAudioClear else { return }
+        boundary.begin(at: ProcessInfo.processInfo.systemUptime)
+        texts.removeAll(); bytes = 0; voiced = false
+        send(["type": "input_audio_buffer.clear"])
+        clearDeadline?.cancel()
+        let epoch = generation
+        clearDeadline = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            guard let self, self.generation == epoch, self.boundary.clearing else { return }
+            self.failed(URLError(.timedOut))
         }
     }
 
@@ -150,7 +188,12 @@ final class NativeVoice {
     }
     #if DEBUG
     func startRecordedAudioTest() async throws { try await connect(capture: false) }
-    func sendRecordedPCM(_ data: Data) async throws {
+    func renewRecordedAudioTest() async throws {
+        scheduleRenewal(after: .zero, capture: false, epoch: generation)
+        await renewal?.value
+        guard ready else { throw MurmurError(message: "Renewed voice connection is not ready.") }
+    }
+    func sendRecordedPCM(_ data: Data, commit: Bool = true) async throws {
         guard ready else { throw MurmurError(message: "Test voice connection is not ready.") }
         let epoch = generation
         for start in stride(from: 0, to: data.count, by: 4800) {
@@ -160,7 +203,7 @@ final class NativeVoice {
             send(["type": "input_audio_buffer.append", "audio": chunk.base64EncodedString()])
             try await Task.sleep(for: .milliseconds(100))
         }
-        send(["type": "input_audio_buffer.commit"])
+        if commit { send(["type": "input_audio_buffer.commit"]) }
         await sendQueue?.value
     }
     #endif
@@ -170,12 +213,13 @@ final class NativeVoice {
     }
     func stop() {
         generation += 1; ready = false
-        renewal?.cancel(); deadline?.cancel(); receiveTask?.cancel(); sendQueue?.cancel()
+        renewal?.cancel(); deadline?.cancel(); receiveTask?.cancel(); sendQueue?.cancel(); clearDeadline?.cancel()
         readiness?.resume(throwing: CancellationError()); readiness = nil
         socket?.cancel(with: .normalClosure, reason: nil); socket = nil
         engine.stop()
         if tapped { engine.inputNode.removeTap(onBus: 0); tapped = false }
         texts.removeAll(); bytes = 0; voiced = false
+        boundary = VoiceTurnBoundary(); supportsAudioClear = false
         let session = AVAudioSession.sharedInstance()
         do { try session.setCategory(.playback, mode: .spokenAudio); try session.setActive(true) }
         catch { NSLog("Murmur: could not restore playback audio session: %@", error.localizedDescription) }

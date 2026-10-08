@@ -15,6 +15,7 @@ struct LiveVoiceTests {
         model.startMicrophone = {}
         await model.activate()
         let voice = NativeVoice(api: api)
+        model.beginMicrophoneTurn = { voice.beginTappedTurn() }
         var finalText: String?
         var voiceError: Error?
         voice.onTranscript = { text, item, final in
@@ -24,6 +25,7 @@ struct LiveVoiceTests {
         voice.onError = { voiceError = $0 }
         try await voice.startRecordedAudioTest()
         defer { voice.stop(); player.clear() }
+        try await voice.renewRecordedAudioTest()
 
         func speak(_ words: String) async throws {
             finalText = nil
@@ -47,6 +49,12 @@ struct LiveVoiceTests {
             try await speak("Please play Lenny's podcast with \(guest).")
             #expect(model.episode?.id == episode.id)
             #expect(model.detailVisible && player.playing)
+            try await player.seek(90)
+            let podcastTail = try await api.speech("The teams are learning to build products together.")
+            try await voice.sendRecordedPCM(Self.pcm(podcastTail), commit: false)
+            model.tap()
+            try await speak("Play from the beginning.")
+            #expect(player.playing && player.position < 5)
             try await player.seek(90)
             model.tap()
             let stopped = player.position

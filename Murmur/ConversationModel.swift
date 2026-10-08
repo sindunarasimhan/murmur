@@ -34,6 +34,7 @@ final class ConversationModel {
     private var recentSpeechUntil = Date.distantPast
     private var activation: Task<Void, Never>?
     private var microphoneGeneration = 0
+    private var microphoneRecovery: Task<Void, Never>?
     private struct PendingAdAcknowledgement {
         let session: ListeningSession
         let action: PlaybackAction
@@ -46,6 +47,7 @@ final class ConversationModel {
     private var adPolicyGeneration = 0
     var startMicrophone: (() async throws -> Void)?
     var stopMicrophone: (() -> Void)?
+    var beginMicrophoneTurn: (() -> Void)?
 
     init(api: ListeningService, player: PodcastPlayback, speech: AssistantSpeech) {
         self.api = api; self.player = player; self.speech = speech
@@ -68,6 +70,7 @@ final class ConversationModel {
 
     func activate() async {
         guard foreground, !microphone else { return }
+        if let microphoneRecovery { await microphoneRecovery.value; return }
         if let activation { await activation.value; return }
         let epoch = microphoneGeneration
         let task = Task { [weak self] in
@@ -90,12 +93,52 @@ final class ConversationModel {
     func microphoneFailed(_ error: Error) {
         stopMicrophone?(); microphone = false
         self.error = error.localizedDescription
+        guard foreground, microphoneRecovery == nil, Self.isTransientVoiceError(error) else { return }
+        microphoneGeneration += 1
+        activation?.cancel(); activation = nil
+        let epoch = microphoneGeneration
+        microphoneRecovery = Task { [weak self] in
+            guard let self else { return }
+            defer { if epoch == self.microphoneGeneration { self.microphoneRecovery = nil } }
+            var lastMessage = error.localizedDescription
+            for delay in [0.5, 1.0, 2.0] {
+                do {
+                    try await Task.sleep(for: .seconds(delay))
+                    guard self.foreground, epoch == self.microphoneGeneration else { return }
+                    try await self.startMicrophone?()
+                    guard !Task.isCancelled, self.foreground, epoch == self.microphoneGeneration else { return }
+                    self.microphone = true
+                    if self.phase == .connecting {
+                        if self.accepting { self.phase = .listening; self.armSilence() }
+                        else { self.setPlaybackPhase() }
+                    }
+                    if self.error == lastMessage { self.error = nil }
+                    return
+                } catch is CancellationError { return }
+                catch {
+                    guard !Task.isCancelled, self.foreground, epoch == self.microphoneGeneration else { return }
+                    lastMessage = error.localizedDescription
+                    self.error = lastMessage
+                    guard Self.isTransientVoiceError(error) else { return }
+                }
+            }
+        }
+    }
+
+    private static func isTransientVoiceError(_ error: Error) -> Bool {
+        let error = error as NSError
+        if error.domain == NSURLErrorDomain {
+            return [NSURLErrorTimedOut, NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost,
+                    NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet].contains(error.code)
+        }
+        return error.domain == NSPOSIXErrorDomain && [32, 54, 57, 60, 61].contains(error.code)
     }
 
     func tap() {
         guard foreground else { return }
         invalidate()
         beginInteraction()
+        if episode != nil, microphone { beginMicrophoneTurn?() }
         accepting = true; heard = ""; reply = ""; phase = .listening; error = nil
         if microphone { armSilence() }
         else {
@@ -400,6 +443,7 @@ final class ConversationModel {
 
     func background() {
         foreground = false; microphoneGeneration += 1; activation?.cancel(); activation = nil
+        microphoneRecovery?.cancel(); microphoneRecovery = nil
         invalidate(); stopMicrophone?(); microphone = false; accepting = false
         let resume = interaction?.playing == true
         interaction = nil

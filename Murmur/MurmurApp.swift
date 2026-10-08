@@ -29,6 +29,7 @@ final class MurmurRuntime {
         conversation = model
         model.startMicrophone = { try await microphone.start() }
         model.stopMicrophone = { microphone.stop() }
+        model.beginMicrophoneTurn = { microphone.beginTappedTurn() }
         microphone.onTranscript = { [weak model] text, id, final in model?.receive(text, item: id, final: final) }
         microphone.onActivity = { [weak model] in model?.audioActivity() }
         microphone.onError = { [weak model] error in model?.microphoneFailed(error) }
