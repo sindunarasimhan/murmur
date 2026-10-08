@@ -1,0 +1,12 @@
+Murmur backlog
+
+2026-10-08 — Native playback captions do not update in real time
+Status: deferred, reported by user during physical-iPhone testing.
+The user reported that time skipping and the other tested functionality worked
+well, but the podcast transcript did not update as the episode played.
+Investigate caption timing, cue availability, and native UI updates before
+attributing a cause. Keep this separate from automatic ad-skipping work.
+Acceptance: displayed podcast captions follow actual playback position during
+normal playback and after a seek, while preserving the user-transcript display
+during voice interaction. Verify on the phone; do not claim word-level timing
+where the source transcript only provides coarse segments.
