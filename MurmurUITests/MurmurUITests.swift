@@ -1,43 +1,77 @@
-//
-//  MurmurUITests.swift
-//  MurmurUITests
-//
-//  Created by Sindhuja Narasimhan on 10/8/26.
-//
-
 import XCTest
 
 final class MurmurUITests: XCTestCase {
-
-    override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
-
-        // In UI tests it is usually best to stop immediately when a failure occurs.
-        continueAfterFailure = false
-
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
-    }
-
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
-    }
+    override func setUpWithError() throws { continueAfterFailure = false }
 
     @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
+    private func launch() -> XCUIApplication {
         let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
         app.launch()
-
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // XCUIAutomation Documentation
-        // https://developer.apple.com/documentation/xcuiautomation
+        XCTAssertTrue(app.buttons["mascot"].waitForExistence(timeout: 15))
+        return app
     }
 
     @MainActor
-    func testLaunchPerformance() throws {
-        // This measures how long it takes to launch your application.
-        measure(metrics: [XCTApplicationLaunchMetric()]) {
-            XCUIApplication().launch()
-        }
+    private func say(_ text: String, in app: XCUIApplication) {
+        let input = app.textFields["test-input"]
+        input.tap()
+        input.typeText(text + "\n")
+    }
+
+    @MainActor
+    private func expect(_ label: String, at element: XCUIElement) {
+        let matches = NSPredicate(format: "label == %@", label)
+        expectation(for: matches, evaluatedWith: element)
+        waitForExpectations(timeout: 10)
+    }
+
+    @MainActor
+    func testHomeGreetingEpisodePauseResumeAndEnd() {
+        let app = launch()
+        XCTAssertTrue(app.staticTexts["home-title"].exists)
+        say("Hey Murmur", in: app)
+        expect("Hey Murmur", at: app.staticTexts["transcript"])
+        say("Play astronomy", in: app)
+        expect("Playing", at: app.staticTexts["playback-state"])
+        XCTAssertFalse(app.staticTexts["home-title"].exists)
+        app.buttons["mascot"].tap()
+        expect("Paused", at: app.staticTexts["playback-state"])
+        say("pause", in: app)
+        expect("Paused", at: app.staticTexts["playback-state"])
+        app.buttons["mascot"].tap()
+        say("resume", in: app)
+        expect("Playing", at: app.staticTexts["playback-state"])
+        expect("2:00", at: app.staticTexts["position"])
+        app.buttons["mascot"].tap()
+        say("end episode", in: app)
+        XCTAssertTrue(app.staticTexts["home-title"].waitForExistence(timeout: 10))
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Returned home"; image.lifetime = .keepAlways; add(image)
+    }
+
+    @MainActor
+    func testLibrarySelectionAndSkipAd() {
+        let app = launch()
+        app.buttons["library"].tap()
+        let episode = app.buttons["episode-fixture-2"]
+        XCTAssertTrue(episode.waitForExistence(timeout: 5))
+        episode.tap()
+        expect("Playing", at: app.staticTexts["playback-state"])
+        app.buttons["mascot"].tap()
+        say("skip ad", in: app)
+        expect("Playing", at: app.staticTexts["playback-state"])
+        expect("3:00", at: app.staticTexts["position"])
+    }
+
+    @MainActor
+    func testBackgroundAndReopenDoesNotRestartEpisode() {
+        let app = launch()
+        say("Hey Murmur play", in: app)
+        expect("Playing", at: app.staticTexts["playback-state"])
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        expect("Playing", at: app.staticTexts["playback-state"])
+        expect("2:00", at: app.staticTexts["position"])
     }
 }
