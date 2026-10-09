@@ -1,0 +1,13 @@
+*
+!Dockerfile.backend
+!package.json
+!package-lock.json
+!backend/
+!backend/**
+!shared/
+!shared/**
+!src/
+!src/**
+**/*.test.ts
+**/.env*
+**/*.log

@@ -1,0 +1,37 @@
+app = "murmur-api-yeshwenth"
+primary_region = "sjc"
+kill_signal = "SIGTERM"
+kill_timeout = 30
+
+[build]
+  dockerfile = "Dockerfile.backend"
+
+[env]
+  NODE_ENV = "production"
+  MURMUR_BACKEND_HOST = "0.0.0.0"
+  MURMUR_BACKEND_PORT = "4545"
+  MURMUR_OBJECT_DIR = "/data/objects"
+  MURMUR_CATALOG = "all"
+
+[[mounts]]
+  source = "murmur_objects"
+  destination = "/data"
+
+[http_service]
+  internal_port = 4545
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "512mb"
