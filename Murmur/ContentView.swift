@@ -119,7 +119,7 @@ struct ContentView: View {
 }
 
 private struct ConnectionSettings: View {
-    @AppStorage("backendAddress") private var address = "http://192.168.1.219:4545"
+    @AppStorage("backendAddress") private var address = "https://murmur-api-yeshwenth.fly.dev"
     var body: some View {
         NavigationStack {
             Form {

@@ -15,16 +15,11 @@ final class NativeVoice {
     private var capturing = true
     private var tapped = false
     private var texts: [String: String] = [:]
-    private var bytes = 0
-    private var voiced = false
-    private var bufferStarted = Date()
-    private var lastLoud = Date()
     private var sendQueue: Task<Void, Never>?
     private var boundary = VoiceTurnBoundary()
     private var supportsAudioClear = false
     private var clearDeadline: Task<Void, Never>?
     var onTranscript: ((String, String, Bool) -> Void)?
-    var onActivity: (() -> Void)?
     var onError: ((Error) -> Void)?
 
     init(api: ListeningService) { self.api = api }
@@ -45,7 +40,7 @@ final class NativeVoice {
         }
         let ticket = try await api.ticket()
         guard epoch == generation else { throw CancellationError() }
-        let connection = URLSession.shared.webSocketTask(with: api.voiceURL, protocols: ["murmur-ticket." + ticket.token])
+        let connection = URLSession.shared.webSocketTask(with: api.voiceURL, protocols: ["murmur-ticket." + ticket.token, "murmur-semantic-v1"])
         socket = connection
         connection.resume()
         receiveTask = Task { [weak self] in
@@ -111,12 +106,9 @@ final class NativeVoice {
             guard conversionError == nil, output.frameLength > 0, let samples = output.int16ChannelData?[0] else { return }
             let count = Int(output.frameLength)
             let data = Data(bytes: samples, count: count * 2)
-            var sum = 0.0
-            for i in stride(from: 0, to: count, by: 8) { let value = Double(samples[i]) / 32768; sum += value * value }
-            let loud = sqrt(sum / Double(max(1, (count + 7) / 8))) > 0.008
             Task { @MainActor in
                 guard let self, self.generation == epoch, capturedAt >= self.boundary.captureStart else { return }
-                self.append(data, loud: loud)
+                self.append(data)
             }
         }
         tapped = true
@@ -129,6 +121,9 @@ final class NativeVoice {
         switch message { case .string(let text): data = Data(text.utf8); case .data(let bytes): data = bytes; @unknown default: return }
         guard let event = try JSONSerialization.jsonObject(with: data) as? [String: Any], let type = event["type"] as? String else { return }
         if type == "ready" {
+            guard event["turnDetection"] as? String == "semantic" else {
+                throw MurmurError(message: "Update the Murmur backend to enable natural turn detection.")
+            }
             supportsAudioClear = event["supportsAudioClear"] as? Bool == true
             ready = true; deadline?.cancel(); readiness?.resume(); readiness = nil
         }
@@ -140,6 +135,8 @@ final class NativeVoice {
         else if type == "renew" {
             scheduleRenewal(after: .zero, capture: capturing, epoch: generation)
         } else if let id = event["item_id"] as? String {
+            if type == "input_audio_buffer.speech_started" { boundary.committed(id); return }
+            if type == "input_audio_buffer.speech_stopped" { return }
             if type == "input_audio_buffer.committed" { boundary.committed(id); return }
             let final = type.hasSuffix(".completed")
             guard boundary.accepts(id, final: final) else { texts.removeValue(forKey: id); return }
@@ -147,6 +144,9 @@ final class NativeVoice {
                 let text = String(((texts[id] ?? "") + delta).suffix(6000))
                 texts[id] = text; onTranscript?(text, id, false)
             } else if type.hasSuffix(".completed"), let text = event["transcript"] as? String {
+                #if DEBUG
+                completedTestTurns += 1
+                #endif
                 texts.removeValue(forKey: id); onTranscript?(text, id, true)
             }
         }
@@ -155,7 +155,7 @@ final class NativeVoice {
     func beginTappedTurn() {
         guard ready, supportsAudioClear else { return }
         boundary.begin(at: ProcessInfo.processInfo.systemUptime)
-        texts.removeAll(); bytes = 0; voiced = false
+        texts.removeAll()
         send(["type": "input_audio_buffer.clear"])
         clearDeadline?.cancel()
         let epoch = generation
@@ -166,15 +166,9 @@ final class NativeVoice {
         }
     }
 
-    private func append(_ data: Data, loud: Bool) {
+    private func append(_ data: Data) {
         guard ready else { return }
-        if bytes == 0 { bufferStarted = Date(); voiced = false }
         send(["type": "input_audio_buffer.append", "audio": data.base64EncodedString()])
-        bytes += data.count
-        if loud { voiced = true; lastLoud = Date(); onActivity?() }
-        if bytes >= 4800, (voiced && Date().timeIntervalSince(lastLoud) >= 0.9 || Date().timeIntervalSince(bufferStarted) > 8) {
-            send(["type": "input_audio_buffer.commit"]); bytes = 0; voiced = false
-        }
     }
     private func send(_ body: [String: String]) {
         guard let socket, let data = try? JSONSerialization.data(withJSONObject: body), let text = String(data: data, encoding: .utf8) else { return }
@@ -187,15 +181,17 @@ final class NativeVoice {
         }
     }
     #if DEBUG
+    private var completedTestTurns = 0
     func startRecordedAudioTest() async throws { try await connect(capture: false) }
     func renewRecordedAudioTest() async throws {
         scheduleRenewal(after: .zero, capture: false, epoch: generation)
         await renewal?.value
         guard ready else { throw MurmurError(message: "Renewed voice connection is not ready.") }
     }
-    func sendRecordedPCM(_ data: Data, commit: Bool = true) async throws {
+    func sendRecordedPCM(_ data: Data, finishWithSilence: Bool = true) async throws {
         guard ready else { throw MurmurError(message: "Test voice connection is not ready.") }
         let epoch = generation
+        let startingTurns = completedTestTurns
         for start in stride(from: 0, to: data.count, by: 4800) {
             try Task.checkCancellation()
             guard epoch == generation else { throw CancellationError() }
@@ -203,7 +199,15 @@ final class NativeVoice {
             send(["type": "input_audio_buffer.append", "audio": chunk.base64EncodedString()])
             try await Task.sleep(for: .milliseconds(100))
         }
-        if commit { send(["type": "input_audio_buffer.commit"]) }
+        if finishWithSilence {
+            for _ in 0..<120 {
+                try Task.checkCancellation()
+                guard epoch == generation else { throw CancellationError() }
+                if completedTestTurns != startingTurns { break }
+                send(["type": "input_audio_buffer.append", "audio": Data(count: 4800).base64EncodedString()])
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
         await sendQueue?.value
     }
     #endif
@@ -218,7 +222,7 @@ final class NativeVoice {
         socket?.cancel(with: .normalClosure, reason: nil); socket = nil
         engine.stop()
         if tapped { engine.inputNode.removeTap(onBus: 0); tapped = false }
-        texts.removeAll(); bytes = 0; voiced = false
+        texts.removeAll()
         boundary = VoiceTurnBoundary(); supportsAudioClear = false
         let session = AVAudioSession.sharedInstance()
         do { try session.setCategory(.playback, mode: .spokenAudio); try session.setActive(true) }

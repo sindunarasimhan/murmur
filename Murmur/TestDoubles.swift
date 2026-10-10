@@ -65,6 +65,7 @@ final class TestListeningService: ListeningService {
     var acknowledgementBarrier: (() async throws -> Void)?
     var acknowledgements: [(String, Double)] = []
     var observedAfterAcknowledgements: [Int] = []
+    var observations: [(reason: String, position: Double)] = []
     var voiceURL: URL { URL(string: "wss://example.com")! }
     func catalog() async throws -> [Episode] { Self.episodes }
     func invite(history: [String]) async throws -> String { "What would you like to hear?" }
@@ -81,6 +82,7 @@ final class TestListeningService: ListeningService {
                          positionSeconds: savedPosition, bookmarkSeconds: nil, phase: "paused", pendingAction: nil)
     }
     func observe(_ session: ListeningSession, reason: String, position: Double) async throws -> ListeningSession {
+        observations.append((reason, position))
         observedAfterAcknowledgements.append(acknowledgements.count)
         return session
     }

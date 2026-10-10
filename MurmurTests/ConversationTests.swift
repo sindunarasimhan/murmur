@@ -68,6 +68,20 @@ struct ConversationTests {
         #expect(model.isListening)
     }
 
+    @Test func detailListeningDoesNotExpireDuringAThoughtfulPause() async throws {
+        let (model, api, player, _) = await setup()
+        model.submit("Play something"); await model.waitForWork()
+        model.tap()
+        model.receive("Could you, um", item: "hesitation", final: false)
+        let priorRequests = api.requests.count
+        try await Task.sleep(for: .seconds(9))
+        #expect(model.isListening && !player.playing)
+        #expect(api.requests.count == priorRequests)
+        model.receive("Could you, um, pause the podcast", item: "hesitation", final: true)
+        await model.waitForWork()
+        #expect(api.requests.count > priorRequests)
+    }
+
     @Test(arguments: [true, false]) func skipPreservesPriorPlayback(playing: Bool) async {
         let (model, _, player, speech) = await setup()
         model.submit("Play"); await model.waitForWork()
@@ -78,12 +92,28 @@ struct ConversationTests {
         #expect(speech.spoken.last?.contains("Skipping") == true)
     }
 
-    @Test func questionRestoresPlaybackWithoutFollowupWindow() async {
+    @Test func questionKeepsExplorationOpenUntilAClosingAction() async {
         let (model, api, player, _) = await setup()
         model.submit("Play"); await model.waitForWork(); api.question = true
         model.tap(); model.receive("Explain that term", item: "question", final: true); await model.waitForWork()
+        #expect(!player.playing && player.position == 120)
+        #expect(model.isListening)
+        #expect(api.observations.map(\.reason).contains("speech-ended"))
+
+        api.question = false
+        api.nextAction = PlaybackAction(id: "return", kind: .return, positionSeconds: 120, play: true)
+        model.receive("Okay, got it", item: "done", final: true); await model.waitForWork()
         #expect(player.playing && player.position == 120)
         #expect(!model.isListening)
+    }
+
+    @Test func followupQuestionDoesNotResumePodcast() async {
+        let (model, api, player, _) = await setup()
+        model.submit("Play"); await model.waitForWork(); api.question = true
+        model.tap(); model.receive("Explain that term", item: "question", final: true); await model.waitForWork()
+        model.receive("Got it, but why?", item: "followup", final: true); await model.waitForWork()
+        #expect(!player.playing && model.isListening)
+        #expect(api.requests.suffix(2) == ["Explain that term", "Got it, but why?"])
     }
 
     @Test func failedConfirmationCannotPretendPlaybackStarted() async {

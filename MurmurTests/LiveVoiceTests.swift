@@ -51,7 +51,7 @@ struct LiveVoiceTests {
             #expect(model.detailVisible && player.playing)
             try await player.seek(90)
             let podcastTail = try await api.speech("The teams are learning to build products together.")
-            try await voice.sendRecordedPCM(Self.pcm(podcastTail), commit: false)
+            try await voice.sendRecordedPCM(Self.pcm(podcastTail), finishWithSilence: false)
             model.tap()
             try await speak("Play from the beginning.")
             #expect(player.playing && player.position < 5)

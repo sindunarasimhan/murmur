@@ -23,7 +23,6 @@ final class ConversationModel {
     private var session: ListeningSession?
     private var history: [String] = []
     private var work: Task<Void, Never>?
-    private var silence: Task<Void, Never>?
     private var generation = 0
     private var foreground = true
     private var accepting = false
@@ -109,7 +108,7 @@ final class ConversationModel {
                     guard !Task.isCancelled, self.foreground, epoch == self.microphoneGeneration else { return }
                     self.microphone = true
                     if self.phase == .connecting {
-                        if self.accepting { self.phase = .listening; self.armSilence() }
+                        if self.accepting { self.phase = .listening }
                         else { self.setPlaybackPhase() }
                     }
                     if self.error == lastMessage { self.error = nil }
@@ -140,14 +139,13 @@ final class ConversationModel {
         beginInteraction()
         if episode != nil, microphone { beginMicrophoneTurn?() }
         accepting = true; heard = ""; reply = ""; phase = .listening; error = nil
-        if microphone { armSilence() }
-        else {
+        if !microphone {
             let epoch = generation
             work = Task { [weak self] in
                 guard let self else { return }
                 await self.activate()
                 guard self.generation == epoch, self.microphone else { return }
-                self.phase = .listening; self.armSilence()
+                self.phase = .listening
             }
         }
     }
@@ -185,7 +183,6 @@ final class ConversationModel {
             invalidate(); beginInteraction(); accepting = true; phase = .listening
         }
         heard = text
-        if phase == .listening { armSilence() }
         guard final else { return }
         consume(item)
         if let request, request.isEmpty { invite() }
@@ -198,7 +195,7 @@ final class ConversationModel {
     }
 
     private func invalidate() {
-        generation += 1; work?.cancel(); silence?.cancel(); speech.stop(); pendingReply = nil
+        generation += 1; work?.cancel(); speech.stop(); pendingReply = nil
     }
     private func check(_ epoch: Int) throws {
         try Task.checkCancellation()
@@ -206,7 +203,7 @@ final class ConversationModel {
     }
 
     private func invite() {
-        if episode != nil { phase = .listening; armSilence(); return }
+        if episode != nil { phase = .listening; return }
         run { epoch in
             self.accepting = true
             let message = try await self.api.invite(history: self.history)
@@ -261,7 +258,13 @@ final class ConversationModel {
                 } else {
                     self.remember(text, turn.answer)
                     try await self.say(turn.answer, epoch: epoch)
-                    try await self.restore(epoch)
+                    if turn.followUp == true {
+                        self.session = try await self.api.observe(turn.session, reason: "speech-ended", position: snapshot.0)
+                        try self.check(epoch)
+                        self.listenForReply()
+                    } else {
+                        try await self.restore(epoch)
+                    }
                 }
             case .home, .stop:
                 try await self.say(resolution.message.isEmpty ? "Ending this episode." : resolution.message, epoch: epoch)
@@ -392,7 +395,7 @@ final class ConversationModel {
     }
 
     private func listenForReply() {
-        accepting = true; phase = .listening; armSilence()
+        accepting = true; phase = .listening
         if let pending = pendingReply {
             pendingReply = nil
             receive(pending.0, item: pending.1, final: true)
@@ -426,21 +429,6 @@ final class ConversationModel {
         speech.stop(); accepting = false; phase = .error
         self.error = error.localizedDescription
     }
-    private func armSilence() {
-        silence?.cancel()
-        guard episode != nil else { return }
-        let epoch = generation
-        silence = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .seconds(8))
-                guard let self else { return }
-                try self.check(epoch)
-                try await self.restore(epoch)
-            } catch { }
-        }
-    }
-    func audioActivity() { if phase == .listening { armSilence() } }
-
     func background() {
         foreground = false; microphoneGeneration += 1; activation?.cancel(); activation = nil
         microphoneRecovery?.cancel(); microphoneRecovery = nil

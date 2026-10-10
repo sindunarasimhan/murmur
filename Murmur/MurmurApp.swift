@@ -20,8 +20,14 @@ final class MurmurRuntime {
         #else
         testing = false
         #endif
-        let address = UserDefaults.standard.string(forKey: "backendAddress") ?? "http://192.168.1.219:4545"
-        let api = ListeningAPI(baseURL: URL(string: address) ?? URL(string: "http://192.168.1.219:4545")!)
+        let hostedAddress = "https://murmur-api-yeshwenth.fly.dev"
+        let savedAddress = UserDefaults.standard.string(forKey: "backendAddress")
+        // Migrate only the former default; preserve explicitly configured servers.
+        if savedAddress == "http://192.168.1.219:4545" {
+            UserDefaults.standard.set(hostedAddress, forKey: "backendAddress")
+        }
+        let address = UserDefaults.standard.string(forKey: "backendAddress") ?? hostedAddress
+        let api = ListeningAPI(baseURL: URL(string: address) ?? URL(string: hostedAddress)!)
         let player = PlaybackEngine()
         let microphone = NativeVoice(api: api)
         voice = microphone
@@ -31,7 +37,6 @@ final class MurmurRuntime {
         model.stopMicrophone = { microphone.stop() }
         model.beginMicrophoneTurn = { microphone.beginTappedTurn() }
         microphone.onTranscript = { [weak model] text, id, final in model?.receive(text, item: id, final: final) }
-        microphone.onActivity = { [weak model] in model?.audioActivity() }
         microphone.onError = { [weak model] error in model?.microphoneFailed(error) }
         player.onRemoteCommand = { [weak model] command, position in model?.remote(command, position: position) }
     }
