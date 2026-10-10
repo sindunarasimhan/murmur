@@ -101,6 +101,16 @@ test('detail-page clarification preserves genuine ambiguity between requested ep
   assert(result.message.includes(design.title));
 });
 
+test('unavailable catalog requests fail gracefully with stored alternatives', async () => {
+  const catalog = service([mars, design], async () => ({ kind: 'clarify', reason: 'unavailable', candidateIds: [mars.id, design.id] }));
+  const result = await catalog.resolve('owner', 'Play Joe Rogan', undefined, [], signal());
+  assert.equal(result.kind, 'clarify');
+  assert.match(result.message, /couldn’t find that in the catalog/i);
+  assert(result.message.includes(mars.title));
+  assert(result.message.includes(design.title));
+  assert.doesNotMatch(result.message, /Which show, guest, or topic/i);
+});
+
 test('delegated catalog choice plays a stored episode without requiring a named show', async () => {
   let observed: CatalogContext | undefined;
   const catalog = service([design, mars], async (input) => {
@@ -144,23 +154,63 @@ test('failed or cancelled interpretation cannot fall back to the only available 
 test('the Jev adapter requires both a supported target and a confident episode selection', async () => {
   assert.deepEqual(await interpreter()(context, signal()), { kind: 'select', episodeId: mars.id });
   for (const overrides of [
-    { catalogMatch: choice('unavailable') },
     { catalogMatch: choice('available', { available: 0.6, unavailable: 0.4 }) },
     { action: choice('choose', { choose: 0.6, unclear: 0.4 }) },
     { episode: choice('invented-id') },
     { episode: choice(mars.id, { [mars.id]: 0.51, [design.id]: 0.49 }) },
   ]) {
-    assert.equal((await interpreter(overrides)(context, signal())).kind, 'clarify');
+    assert.equal((await interpreter(overrides)({ ...context, utterance: 'Find the available interview' }, signal())).kind, 'clarify');
   }
 });
 
 test('the Jev adapter supports delegated repository choice without a named catalog match', async () => {
+  for (const utterance of ['Pick whatever you like']) {
+    const intent = await interpreter({
+      action: choice('recommend'),
+      catalogMatch: choice('unspecified'),
+      episode: choice('none'),
+    })({ ...context, utterance }, signal());
+    assert.deepEqual(intent, { kind: 'recommend' });
+  }
+  const noProvider = createCatalogInterpreter({ apiKey: 'test-only', model: 'test-only' }, async () => {
+    throw new Error('Unspecified playback should not need provider ranking');
+  });
+  for (const utterance of ['Play a podcast', 'Put something on']) {
+    assert.deepEqual(await noProvider({ ...context, utterance }, signal()), { kind: 'recommend' });
+  }
+});
+
+test('the Jev adapter returns alternatives when a named request is unavailable', async () => {
   const intent = await interpreter({
-    action: choice('recommend'),
-    catalogMatch: choice('unspecified'),
+    action: choice('choose'),
+    catalogMatch: choice('unavailable'),
     episode: choice('none'),
-  })({ ...context, utterance: 'Pick whatever you like' }, signal());
-  assert.deepEqual(intent, { kind: 'recommend' });
+  })({ ...context, utterance: 'Play Joe Rogan' }, signal());
+  assert.deepEqual(intent, { kind: 'clarify', reason: 'unavailable', candidateIds: [mars.id, design.id] });
+});
+
+test('direct show or guest requests are not satisfied by description-only topic mentions', async () => {
+  const adEpisode = { ...mars, id: 'ad-load', title: 'Podcast ad load', showTitle: 'Podnews', guest: undefined, description: 'A discussion mentions Joe Rogan while reviewing ad inventory.' };
+  const intent = await createCatalogInterpreter({ apiKey: 'test-only', model: 'test-only' }, async () => {
+    throw new Error('Description-only missing named requests should not need provider ranking');
+  })({ utterance: 'Play Joe Rogan', episodes: [adEpisode, design], history: [] }, signal());
+  assert.deepEqual(intent, { kind: 'clarify', reason: 'unavailable', candidateIds: [adEpisode.id] });
+});
+
+test('topic searches send a relevant catalog shortlist instead of the whole catalog', async () => {
+  const unrelated = Array.from({ length: 20 }, (_, index) => ({ ...mars, id: `unrelated-${index}`, title: `General episode ${index}`, showTitle: 'General Show', guest: undefined, description: 'A conversation about infrastructure and culture.' }));
+  const product = { ...design, id: 'product-taste', title: 'Developing product taste', guest: 'Priya Rao', description: 'How product leaders develop taste and judgment.' };
+  const choices: typeof askChoices = async <K extends string>(_state: unknown, questions: Record<K, { criteria: Record<string, string> }>) => {
+    const all = questions as Record<string, { criteria: Record<string, string> }>;
+    if (!all.episode) return { action: choice('choose'), initialAction: choice('none') } as Record<K, ChoiceAnswer>;
+    throw new Error('Relevant topic retrieval should not need full catalog ranking');
+  };
+  const result = await createCatalogInterpreter({ apiKey: 'test-only', model: 'test-only' }, choices)({
+    utterance: 'Play something about product',
+    episodes: [product, ...unrelated],
+    history: [],
+  }, signal());
+  assert.deepEqual(result, { kind: 'select', episodeId: product.id });
 });
 
 test('Jev candidate arguments are generated from the supplied catalog', async () => {
@@ -170,18 +220,23 @@ test('Jev candidate arguments are generated from the supplied catalog', async ()
     if (!all.episode) {
       return { action: choice('choose'), initialAction: choice('none') } as Record<K, ChoiceAnswer>;
     }
-    assert.deepEqual(Object.keys(all.episode!.criteria).sort(), [mars.id, design.id, 'none'].sort());
-    assert(all.episode!.criteria[design.id]!.includes(design.showTitle));
+    assert(Object.hasOwn(all.episode!.criteria, mars.id));
+    assert(Object.hasOwn(all.episode!.criteria, 'none'));
+    assert(all.episode!.criteria[mars.id]!.includes(mars.showTitle));
     checked = true;
     return { catalogMatch: choice('available'), episode: choice(design.id) } as Record<K, ChoiceAnswer>;
   };
-  const result = await createCatalogInterpreter({ apiKey: 'test-only', model: 'test-only' }, choices)(context, signal());
+  const shared = [
+    { ...mars, description: 'A conversation about research.' },
+    { ...design, description: 'A conversation about research.' },
+  ];
+  const result = await createCatalogInterpreter({ apiKey: 'test-only', model: 'test-only' }, choices)({ utterance: 'research interview', episodes: shared, history: [] }, signal());
   assert(checked); assert.deepEqual(result, { kind: 'select', episodeId: design.id });
 });
 
 test('episode selection preserves a bundled startup modifier as structured intent', async () => {
   const intent = await interpreter({ initialAction: choice('enable-ad-skipping') })({ ...context, utterance: 'Play the design episode without ads' }, signal());
-  assert.deepEqual(intent, { kind: 'select', episodeId: mars.id, initialAction: 'enable-ad-skipping' });
+  assert.deepEqual(intent, { kind: 'select', episodeId: design.id, initialAction: 'enable-ad-skipping' });
   const selected = await service([mars], async () => ({ kind: 'select', episodeId: mars.id, initialAction: 'restart' }))
     .resolve('owner', 'Play this from the beginning', undefined, [], signal());
   assert.equal(selected.kind, 'play');

@@ -11,12 +11,18 @@ function play(episode: PreparedEpisode, initialAction?: 'restart' | 'enable-ad-s
   return { kind: 'play', episode, message: `${episode.showTitle}. ${detail}`, initialAction };
 }
 
-function clarification(episodes: PreparedEpisode[], candidateIds: string[] = [], current?: PreparedEpisode): CatalogResolution {
+function clarification(episodes: PreparedEpisode[], candidateIds: string[] = [], current?: PreparedEpisode, reason?: 'unavailable'): CatalogResolution {
   const candidates = [...new Set(candidateIds)]
     .map((id) => episodes.find((episode) => episode.id === id))
     .filter((episode): episode is PreparedEpisode => episode !== undefined);
   let message = 'Which show, guest, or topic would you like to hear?';
-  if (candidates.length === 2) {
+  if (reason === 'unavailable' && candidates.length >= 2) {
+    message = `I couldn’t find that in the catalog. I can play “${candidates[0]!.title}” or “${candidates[1]!.title}” instead.`;
+  } else if (reason === 'unavailable') {
+    message = candidates.length === 1
+      ? `I couldn’t find that in the catalog. I can play “${candidates[0]!.title}” instead.`
+      : 'I couldn’t find that in the catalog. Try a different show, guest, or topic.';
+  } else if (candidates.length === 2) {
     message = `Did you mean “${candidates[0]!.title}” or “${candidates[1]!.title}”?`;
   } else if (current) {
     message = 'Could you repeat what you would like me to do with this episode?';
@@ -73,7 +79,7 @@ export class CatalogService {
       case 'cancel':
         return { kind: 'cancel', message: '' };
       case 'clarify':
-        return clarification(episodes, intent.candidateIds, current);
+        return clarification(episodes, intent.candidateIds, current, intent.reason);
     }
   }
 }
