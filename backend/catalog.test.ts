@@ -26,9 +26,9 @@ function decisions(answers: Record<string, ChoiceAnswer>): typeof askChoices {
 function choice(value: string, probabilities: Record<string, number> = { [value]: 1 }): ChoiceAnswer {
   return { choice: value, confidence: 1, probabilities };
 }
-function interpreter(overrides: Partial<Record<'action' | 'catalogMatch' | 'episode', ChoiceAnswer>> = {}) {
+function interpreter(overrides: Partial<Record<'action' | 'catalogMatch' | 'episode' | 'initialAction', ChoiceAnswer>> = {}) {
   return createCatalogInterpreter({ apiKey: 'test-only', model: 'test-only' }, decisions({
-    action: choice('choose'), catalogMatch: choice('available'), episode: choice(mars.id), ...overrides,
+    action: choice('choose'), catalogMatch: choice('available'), initialAction: choice('none'), episode: choice(mars.id), ...overrides,
   }));
 }
 
@@ -75,11 +75,43 @@ test('an unclear request in an active episode asks about that episode rather tha
   }
 });
 
+test('episode exploration interruptions are routed by the interpreter, not phrase shortcuts', async () => {
+  let observed: CatalogContext | undefined;
+  let charged = false;
+  const catalog = new CatalogService({
+    catalog: async () => [mars, design],
+    unfinished: async () => undefined,
+    charge: async () => { charged = true; },
+  }, async (input) => {
+    observed = input;
+    return { kind: 'current' };
+  });
+  const result = await catalog.resolve('owner', 'Who is Ruth Porat?', mars.id, [], signal());
+  assert.equal(result.kind, 'current');
+  assert.equal(result.message, '');
+  assert.equal(observed?.utterance, 'Who is Ruth Porat?');
+  assert.equal(observed?.currentEpisodeId, mars.id);
+  assert.equal(charged, true);
+});
+
 test('detail-page clarification preserves genuine ambiguity between requested episodes', async () => {
   const catalog = service([mars, design], async () => ({ kind: 'clarify', candidateIds: [mars.id, design.id] }));
   const result = await catalog.resolve('owner', 'Switch to another episode', mars.id, [], signal());
   assert(result.message.includes(mars.title));
   assert(result.message.includes(design.title));
+});
+
+test('delegated catalog choice plays a stored episode without requiring a named show', async () => {
+  let observed: CatalogContext | undefined;
+  const catalog = service([design, mars], async (input) => {
+    observed = input;
+    return { kind: 'recommend' };
+  });
+  const result = await catalog.resolve('owner', 'Pick whatever you like', undefined, [], signal());
+  assert.equal(result.kind, 'play');
+  assert.equal(result.episode?.id, design.id);
+  assert.equal(result.message, `${design.showTitle}. With ${design.guest}.`);
+  assert.equal(observed?.episodes.length, 2);
 });
 
 test('resume uses only saved episodes still available in the catalog and does not pick an arbitrary first result', async () => {
@@ -122,15 +154,51 @@ test('the Jev adapter requires both a supported target and a confident episode s
   }
 });
 
+test('the Jev adapter supports delegated repository choice without a named catalog match', async () => {
+  const intent = await interpreter({
+    action: choice('recommend'),
+    catalogMatch: choice('unspecified'),
+    episode: choice('none'),
+  })({ ...context, utterance: 'Pick whatever you like' }, signal());
+  assert.deepEqual(intent, { kind: 'recommend' });
+});
+
 test('Jev candidate arguments are generated from the supplied catalog', async () => {
   let checked = false;
   const choices: typeof askChoices = async <K extends string>(_state: unknown, questions: Record<K, { criteria: Record<string, string> }>) => {
     const all = questions as Record<string, { criteria: Record<string, string> }>;
+    if (!all.episode) {
+      return { action: choice('choose'), initialAction: choice('none') } as Record<K, ChoiceAnswer>;
+    }
     assert.deepEqual(Object.keys(all.episode!.criteria).sort(), [mars.id, design.id, 'none'].sort());
     assert(all.episode!.criteria[design.id]!.includes(design.showTitle));
     checked = true;
-    return { action: choice('choose'), catalogMatch: choice('available'), episode: choice(design.id) } as Record<K, ChoiceAnswer>;
+    return { catalogMatch: choice('available'), episode: choice(design.id) } as Record<K, ChoiceAnswer>;
   };
   const result = await createCatalogInterpreter({ apiKey: 'test-only', model: 'test-only' }, choices)(context, signal());
   assert(checked); assert.deepEqual(result, { kind: 'select', episodeId: design.id });
+});
+
+test('episode selection preserves a bundled startup modifier as structured intent', async () => {
+  const intent = await interpreter({ initialAction: choice('enable-ad-skipping') })({ ...context, utterance: 'Play the design episode without ads' }, signal());
+  assert.deepEqual(intent, { kind: 'select', episodeId: mars.id, initialAction: 'enable-ad-skipping' });
+  const selected = await service([mars], async () => ({ kind: 'select', episodeId: mars.id, initialAction: 'restart' }))
+    .resolve('owner', 'Play this from the beginning', undefined, [], signal());
+  assert.equal(selected.kind, 'play');
+  assert.equal(selected.initialAction, 'restart');
+});
+
+test('unique catalog entity survives trailing transcription noise without hardcoded names', async () => {
+  const guestEpisode = { ...mars, id: 'guest-episode', guest: 'Kat Wu', title: 'AI-native product work' };
+  const result = await createCatalogInterpreter({ apiKey: 'test-only', model: 'test-only' }, decisions({
+    action: choice('choose'),
+    catalogMatch: choice('unavailable'),
+    initialAction: choice('none'),
+    episode: choice('none'),
+  }))({
+    utterance: 'Could you play the Cat Wu episode upper kim lit',
+    episodes: [guestEpisode, design],
+    history: [],
+  }, signal());
+  assert.deepEqual(result, { kind: 'select', episodeId: guestEpisode.id });
 });

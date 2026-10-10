@@ -6,9 +6,9 @@ import { exactCommand } from './intelligence';
 
 type CatalogRepository = Pick<Repository, 'catalog' | 'unfinished' | 'charge'>;
 
-function play(episode: PreparedEpisode): CatalogResolution {
+function play(episode: PreparedEpisode, initialAction?: 'restart' | 'enable-ad-skipping' | 'skip-intro'): CatalogResolution {
   const detail = episode.guest ? `With ${episode.guest}.` : episode.title;
-  return { kind: 'play', episode, message: `${episode.showTitle}. ${detail}` };
+  return { kind: 'play', episode, message: `${episode.showTitle}. ${detail}`, initialAction };
 }
 
 function clarification(episodes: PreparedEpisode[], candidateIds: string[] = [], current?: PreparedEpisode): CatalogResolution {
@@ -53,8 +53,10 @@ export class CatalogService {
     switch (intent.kind) {
       case 'select': {
         const selected = episodes.find((episode) => episode.id === intent.episodeId);
-        return selected ? play(selected) : clarification(episodes);
+        return selected ? play(selected, intent.initialAction) : clarification(episodes);
       }
+      case 'recommend':
+        return play(episodes[0]!);
       case 'resume': {
         if (current) return { kind: 'current', message: '' };
         const unfinished = await this.repository.unfinished(owner);
