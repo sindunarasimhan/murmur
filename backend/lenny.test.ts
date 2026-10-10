@@ -57,3 +57,12 @@ test('clearing a voice turn drops buffered audio but does not reset cumulative r
   }
   assert.throws(() => flooded.accept(append, 1), /budget/);
 });
+
+test('semantic voice accepts extended speech without a client commit and retains rate protection', () => {
+  const budget = new ContinuousVoiceBudget(0, true);
+  const frame = { type: 'input_audio_buffer.append', audio: Buffer.alloc(4800).toString('base64') };
+  for (let i = 0; i < 300; i++) budget.accept(frame, i * 100);
+  assert.throws(() => budget.accept({ type: 'input_audio_buffer.commit' }, 30000));
+  assert.deepEqual(JSON.parse(budget.accept({ type: 'input_audio_buffer.clear' }, 30000)), { type: 'input_audio_buffer.clear' });
+  assert.throws(() => new ContinuousVoiceBudget(0, true).accept({ type: frame.type, audio: Buffer.alloc(48_000 * 4).toString('base64') }, 1));
+});

@@ -1,0 +1,51 @@
+Automatic ad skipping workplan
+
+User scope
+Preprocess ingested episodes into recording-specific ad intervals. A voice
+request enables skips for the current episode, without edited audio, a new
+playback timeline or transcript regeneration at command time. Replace the
+partial ad path with shared interval data for one-time and automatic skips.
+No settings screen, caption bug fix, or other backlog work without consent.
+
+P-stack feature steps
+1. `how` over the affected subsystem.
+2. `architect` for parallel design exploration.
+3. Write the throughput checkpoint as four todo items.
+4. Delegate code-writing to a subagent with a specific scope and named data shape.
+5. Verify on the matching surface. Wrong-surface is not a pass.
+6. Build, verify and commit small ordered units.
+7. If the design is contested, interrogate before shipping.
+8. Opening a PR: pending repository and final verification state.
+
+Throughput checkpoint
+- Blocking first steps: trace RSS/audio identity and native player ownership;
+  compare two designs; freeze a recording-bound interval contract before edits.
+- Independent workstreams: read-only ingestion and native playback investigations.
+  Then a single feature owner coordinates backend and native protocol edits.
+- Shared mutable state: no overlapping edits to protocol, controller or schema.
+  Existing unrelated dirty files are preserved. Import adds ad marker metadata
+  without replacing audio; playback owns preference and automatic seeks.
+- Smallest safe decomposition: recording-bound preprocessing and repeatable
+  evaluation, then voice preference/native playback, then end-to-end regression.
+
+Verification gates
+Ad versus non-ad examples; exact original timeline; matching source version;
+marker validation and no clipped interview; repeated preprocessing; voice
+enable/disable and skip-current; enable mid-ad; playing and paused states;
+manual seeks; background playback with voice off; episode switch resets
+preference; home selection and existing pause/resume regression. Actual native
+playback checks are separate from generated audio and backend tests.
+
+Workflow limitation
+P-stack specifies Claude and Grok role models and Cursor-specific tools, which
+are not available in this session. Independent available-model reviews are an
+explicit adaptation, not a claim to have run those named model families.
+
+Revised after user design checkpoint
+The user paused implementation and rejected recording replacement work.
+Keep the existing audio and transcript. Analyze timestamped transcript passages
+at import and store ad start/end flags alongside them. A current-episode voice
+request enables player-clock seeks without loading or replacing an item.
+Do not add recording snapshot tables, full-audio retranscription, settings,
+or scheduled ingestion. Mark passage-level timing and source limitations honestly.
+Test no player reload or position reset when the preference changes.

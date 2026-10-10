@@ -7,6 +7,8 @@ import { createDatabase, migrate, transaction } from '../backend/database';
 import { LENNY_FEED, LENNY_REPOSITORY, LENNY_REVISION, parseChapters, parseLennyTranscript, publisherAdBreaks, reviewedAdBreaks, seconds } from '../backend/lenny-catalog';
 import { FOCUS_AUDIO_SHA, FOCUS_EPISODE_ID, prepareFocusEpisode } from '../backend/focus-episode';
 import { ObjectStore } from '../backend/storage';
+import { createAdClassifier, preprocessAds } from '../backend/ad-preprocessing';
+import { validatedAdPlan } from '../shared/ad-plan';
 
 const directory = new URL('../.murmur-data/lenny/', import.meta.url);
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -61,14 +63,20 @@ try {
     // Version the publisher enclosure and transcript together. This is provenance,
     // not a claim that the source timestamps have been audio-aligned by Murmur.
     const version = hash(JSON.stringify([audioUrl.href, item.enclosure['@_length'], duration, hash(markdown)]));
+    const existing = await pool.query('SELECT ad_plan FROM episodes WHERE id=$1 AND audio_version=$2', [id, version]);
+    let adPlan = validatedAdPlan(existing.rows[0]?.ad_plan, version, duration);
+    if (!adPlan) {
+      try { adPlan = await preprocessAds({ audioVersion: version, durationSeconds: duration, segments }, createAdClassifier(config)); }
+      catch (error) { console.warn(`${entry.guest}: ad preprocessing unavailable; ordinary playback is unchanged.`, error instanceof Error ? error.message : 'Preparation failed'); }
+    }
     await transaction(pool, async (db) => {
-      await db.query(`INSERT INTO episodes(id,title,show_title,description,audio_version,duration_seconds,status,collection,guest,published_at,source_url,artwork_url,audio_url,chapters,ad_breaks,prepared_at)
-        VALUES($1,$2,'Lenny’s Podcast',$3,$4,$5,'ready','lenny-free',$6,$7,$8,$9,$10,$11,$12,now())
+      await db.query(`INSERT INTO episodes(id,title,show_title,description,audio_version,duration_seconds,status,collection,guest,published_at,source_url,artwork_url,audio_url,chapters,ad_breaks,ad_plan,prepared_at)
+        VALUES($1,$2,'Lenny’s Podcast',$3,$4,$5,'ready','lenny-free',$6,$7,$8,$9,$10,$11,$12,$13,now())
         ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title,description=EXCLUDED.description,audio_version=EXCLUDED.audio_version,duration_seconds=EXCLUDED.duration_seconds,
         audio_url=EXCLUDED.audio_url,artwork_url=EXCLUDED.artwork_url,guest=EXCLUDED.guest,published_at=EXCLUDED.published_at,source_url=EXCLUDED.source_url,
-        chapters=EXCLUDED.chapters,ad_breaks=EXCLUDED.ad_breaks,status='ready',prepared_at=now()`,
+        chapters=EXCLUDED.chapters,ad_breaks=EXCLUDED.ad_breaks,ad_plan=EXCLUDED.ad_plan,status='ready',prepared_at=now()`,
       [id, item.title, correction?.description ?? entry.description, version, duration, id === 'lenny-noam-segal' ? 'Noam Segal' : entry.guest.replace(/\s+(?:V\d+|\d+\.\d+)$/, '').replace('Jason M Lemkin', 'Jason Lemkin'), new Date(item.pubDate).toISOString().slice(0, 10), item.link,
-        item['itunes:image']?.['@_href'] ?? feed['itunes:image']?.['@_href'], audioUrl.href, JSON.stringify(chapters), JSON.stringify(ads)]);
+        item['itunes:image']?.['@_href'] ?? feed['itunes:image']?.['@_href'], audioUrl.href, JSON.stringify(chapters), JSON.stringify(ads), JSON.stringify(adPlan)]);
       await db.query('DELETE FROM transcript_segments WHERE episode_id=$1', [id]);
       for (const segment of segments) await db.query(`INSERT INTO transcript_segments(episode_id,audio_version,id,start_seconds,end_seconds,text) VALUES($1,$2,$3,$4,$5,$6)`,
         [id, version, segment.id, segment.startSeconds, segment.endSeconds, segment.text]);

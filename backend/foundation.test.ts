@@ -76,6 +76,22 @@ test('PostgreSQL, preparation jobs, and authenticated listening work together', 
   };
   const turnInput = (session: ListeningSession, utterance: string): TurnRequest => ({ revision: session.revision, audioVersion: session.audioVersion, positionSeconds: session.positionSeconds, requestId: randomUUID(), utterance });
   try {
+    await t.test('native speech requires identity, validates text, and returns disclosed provider audio', async () => {
+      const unauthenticated = await app.inject({ method: 'POST', url: '/v2/speech', headers: headers(), payload: { text: 'Hello' } });
+      assert.equal(unauthenticated.statusCode, 401);
+      const identity = await guest();
+      for (const text of ['', 'a'.repeat(4001)]) {
+        const invalid = await app.inject({ method: 'POST', url: '/v2/speech', headers: headers(identity.token), payload: { text } });
+        assert.equal(invalid.statusCode, 400);
+      }
+      const before = speechCalls;
+      const audio = await app.inject({ method: 'POST', url: '/v2/speech', headers: headers(identity.token), payload: { text: 'Ready to listen.' } });
+      assert.equal(audio.statusCode, 200);
+      assert.equal(audio.headers['x-murmur-voice-disclosure'], 'ai-generated');
+      assert.equal(audio.headers['content-type'], 'audio/mpeg');
+      assert.equal(speechCalls, before + 1);
+      speechCalls = before;
+    });
     await t.test('a queued preparation survives a producer restart and stores exact audio plus searchable passages', async () => {
       await enqueuePreparedEpisode(pool, boss);
       const before = await repository.episode();

@@ -59,7 +59,7 @@ test('continue inside a conversation reaches semantic interpretation instead of 
 test('semantic playback has one resume outcome rather than competing play and return labels', async () => {
   const config = backendConfig(); config.providers.typesafe.apiKey = 'test-only';
   const choices: typeof askChoices = async <K extends string>(_state: unknown, questions: Record<K, ChoiceQuestion>) => {
-    assert(!('return' in questions['action' as K].criteria));
+    assert('return' in questions['action' as K].criteria);
     return Object.fromEntries(Object.entries<ChoiceQuestion>(questions).map(([key, question]) => {
       const selected = key === 'action' ? 'play' : key === 'passage' ? 'none' : 'unspecified';
       return [key, { choice: selected, confidence: 1, probabilities: Object.fromEntries(Object.keys(question.criteria).map((option) => [option, option === selected ? 1 : 0])) }];
@@ -69,6 +69,29 @@ test('semantic playback has one resume outcome rather than competing play and re
   assert.equal(decision.kind, 'play');
   assert.equal(decision.source, 'jev');
   assert.equal(playbackAction(decision, session, 4477)?.positionSeconds, session.bookmarkSeconds);
+});
+
+test('semantic closure returns to the bookmarked podcast while follow-up questions continue exploring', async () => {
+  const config = backendConfig(); config.providers.typesafe.apiKey = 'test-only';
+  for (const [utterance, selected, expected] of [
+    ['Okay, got it', 'return', 'return'],
+    ['Got it, but why?', 'deeper', 'deeper'],
+  ] as const) {
+    const choices: typeof askChoices = async <K extends string>(_state: unknown, questions: Record<K, ChoiceQuestion>) => Object.fromEntries(Object.entries<ChoiceQuestion>(questions).map(([key, question]) => {
+      const choice = key === 'action' ? selected : key === 'passage' ? 'none' : 'unspecified';
+      return [key, { choice, confidence: 1, probabilities: Object.fromEntries(Object.keys(question.criteria).map((option) => [option, option === choice ? 1 : 0])) } satisfies ChoiceAnswer];
+    })) as Record<K, ChoiceAnswer>;
+    const decision = await createIntelligence(config, choices).decide({
+      utterance, session, evidence: [], history: [{ question: 'Explain that', answer: 'It means revealing complexity gradually.' }],
+    }, new AbortController().signal);
+    assert.equal(decision.kind, expected, utterance);
+    if (decision.kind === 'return') {
+      const action = playbackAction(decision, session, 4477)!;
+      assert.equal(action.kind, 'return');
+      assert.equal(action.positionSeconds, session.bookmarkSeconds);
+      assert.equal(action.play, true);
+    }
+  }
 });
 
 test('live semantic commands resolve against the prepared podcast and conversation context', { skip: process.env.MURMUR_LIVE_SEMANTICS !== '1' }, async () => {
@@ -85,7 +108,9 @@ test('live semantic commands resolve against the prepared podcast and conversati
       { utterance: 'continue where we left off', expected: 'play' },
       { utterance: 'Pick up from there', expected: 'play' },
       { utterance: 'Could you get the podcast going again', expected: 'play' },
-      { utterance: 'Let us get back to the podcast', expected: 'play', explanation: true },
+      { utterance: 'Let us get back to the podcast', expected: 'return', explanation: true },
+      { utterance: 'Okay, got it', expected: 'return', explanation: true },
+      { utterance: 'Got it, but why?', expected: 'deeper', explanation: true },
       { utterance: 'Could you pause this for a moment', expected: 'pause' },
       { utterance: 'Run it from the top', expected: 'seek' },
       { utterance: 'Can you explain what he meant by that', expected: 'explain' },

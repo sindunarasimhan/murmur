@@ -14,6 +14,18 @@ normal playback and after a seek, while preserving the user-transcript display
 during voice interaction. Verify on the phone; do not claim word-level timing
 where the source transcript only provides coarse segments.
 
+2026-10-08 — Ad-setting acknowledgement recovery after failed navigation
+Status: deferred by explicit user request; do not resume without consent.
+If an ad-setting acknowledgement commits remotely but its response is lost,
+then an attempted episode switch or return home also fails, preserve enough
+recovery state for commands on the original episode to continue. Review found
+that abandoning recovery before departure succeeds can leave a stale session.
+Some corrective changes were already underway when deferred; those changes do
+not establish that this edge case is verified. Check their final state first.
+Acceptance: simulate a committed-but-lost acknowledgement followed by failed
+episode opening or failed home confirmation, then successfully pause/resume the
+original episode. Late responses must not change a replacement episode.
+
 Ideas
 =====
 

@@ -100,6 +100,21 @@ export async function createApp(options: { config: BackendConfig; pool: Pool; ob
     finally { reply.raw.off('close', disconnect); }
   });
   app.post('/v2/live-voice-ticket', async (request) => continuousVoice.ticket(await owner(request)));
+  app.post('/v2/speech', async (request, reply) => {
+    const { text } = z.object({ text: z.string().trim().min(1).max(4000) }).strict().parse(request.body);
+    const ownerId = await owner(request);
+    if (!config.providers.openai.apiKey) throw new ServiceError(503, 'speech_unconfigured', 'Spoken audio is unavailable.');
+    await repository.charge(ownerId);
+    const controller = new AbortController();
+    const disconnect = () => { if (!reply.raw.writableEnded) controller.abort(); };
+    reply.raw.on('close', disconnect);
+    try {
+      const bytes = await (options.speech ?? synthesizeAudio)(text, {
+        config: { ...config.providers.openai, apiKey: config.providers.openai.apiKey }, signal: controller.signal,
+      });
+      return reply.type('audio/mpeg').header('X-Murmur-Voice-Disclosure', 'ai-generated').send(Buffer.from(bytes));
+    } finally { reply.raw.off('close', disconnect); }
+  });
   app.delete('/v2/live-voice', async (request) => { continuousVoice.cancel(await owner(request)); return { stopped: true }; });
   app.post('/v2/sessions', async (request) => {
     const input = z.object({ episodeId: z.string().regex(/^(small-places|lenny-[a-z0-9_-]+)$/) }).strict().parse(request.body);

@@ -2,6 +2,8 @@ import type { TurnRequest, TurnResult } from '../shared/listening';
 import { Repository } from './repository';
 import { playbackAction, type Intelligence } from './intelligence';
 import { ServiceError } from './errors';
+import { adDestination } from '../shared/ad-plan';
+import { randomUUID } from 'node:crypto';
 
 export class ListeningService {
   private active = new Map<string, AbortController>();
@@ -29,6 +31,17 @@ export class ListeningService {
       let action = playbackAction(decision, session, episode.durationSeconds);
       let adResult: Awaited<ReturnType<Repository['currentAd']>> | undefined;
       let introResult: Awaited<ReturnType<Repository['currentIntro']>> | undefined;
+      let adModeUnavailable = false;
+      if (decision.kind === 'set-ad-skipping' && decision.enabled !== undefined) {
+        const plan = await this.repository.adPlan(session);
+        adModeUnavailable = decision.enabled && (plan.status === 'unavailable' || !plan.intervals.length);
+        if (!adModeUnavailable) {
+          const position = session.bookmarkSeconds ?? session.positionSeconds;
+          action = { id: randomUUID(), kind: 'set-ad-skipping', enabled: decision.enabled, plan,
+            positionSeconds: decision.enabled ? adDestination(plan, position) ?? position : position,
+            play: input.resumeAfterAction ?? false };
+        }
+      }
       if (decision.kind === 'skip-intro') {
         introResult = await this.repository.currentIntro(session);
         if (introResult.kind === 'skip') action = { ...playbackAction({ kind: 'seek', source: 'code', position: introResult.endSeconds }, session, episode.durationSeconds)!, kind: 'skip-intro' };
@@ -42,10 +55,15 @@ export class ListeningService {
         if (passage) action = playbackAction({ kind: 'seek', source: 'jev', delta: passage.startSeconds - session.positionSeconds }, session, episode.durationSeconds);
       }
       if (action && ['seek', 'skip-ad', 'skip-intro'].includes(action.kind)) action.play = input.resumeAfterAction ?? true;
+      if (action && session.adSkipping && action.kind !== 'pause' && action.kind !== 'set-ad-skipping') {
+        const plan = await this.repository.activeAdPlan(session);
+        if (plan) action.positionSeconds = adDestination(plan, action.positionSeconds) ?? action.positionSeconds;
+      }
       let answer = '';
       let evidence = candidates.filter((item) => item.id === decision.passageId);
       if (!action) {
-        if (decision.kind === 'skip-ad') answer = adResult?.kind === 'outside-ad' ? 'There isn’t an ad to skip at this point.' : 'I can’t verify an ad ending here. You can tell me how many seconds to skip.';
+        if (adModeUnavailable) answer = 'There aren’t any ad sections marked for this recording yet.';
+        else if (decision.kind === 'skip-ad') answer = adResult?.kind === 'outside-ad' ? 'There isn’t an ad to skip at this point.' : 'I can’t verify an ad ending here. You can tell me how many seconds to skip.';
         else if (decision.kind === 'skip-intro') answer = introResult?.kind === 'past-intro' ? 'We’re already past the intro.' : 'I don’t have a verified intro ending for this recording, so I won’t guess where to jump.';
         else if (decision.kind === 'unclear') answer = 'Would you like an explanation, or a playback action?';
         else if (!evidence.length) answer = 'I do not have a matching passage for that question. Try asking about the part we just heard.';
