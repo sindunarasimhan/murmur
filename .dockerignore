@@ -8,6 +8,8 @@
 !shared/**
 !src/
 !src/**
+!scripts/
+!scripts/import-public-transcripts.mts
 **/*.test.ts
 **/.env*
 **/*.log

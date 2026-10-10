@@ -22,6 +22,7 @@
     "backend:api": "node --env-file-if-exists=.env.local --import tsx backend/main.ts",
     "backend:worker": "node --env-file-if-exists=.env.local --import tsx backend/worker.ts",
     "catalog:import": "node --env-file-if-exists=.env.local --import tsx scripts/import-lenny.mts",
+    "catalog:import-public": "node --env-file-if-exists=.env.local --import tsx scripts/import-public-transcripts.mts",
     "eval:lenny": "node --import tsx scripts/evaluate-lenny.mts",
     "test:backend": "node --import tsx --test backend/*.test.ts",
     "fixture:episode": "node scripts/build-prepared-episode.mjs",
