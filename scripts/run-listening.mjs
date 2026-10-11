@@ -55,14 +55,14 @@ try {
     if (Date.now() > deadline) throw new Error('Murmur could not start. Check the backend logs.');
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  const focus = process.env.MURMUR_CATALOG !== 'all';
+  const focus = process.env.MURMUR_CATALOG === 'focus';
   const expectedCount = focus ? 1 : 50;
   const prepared = (catalog) => Array.isArray(catalog) && catalog.length === expectedCount && (!focus || catalog[0].id === 'lenny-brian-halligan' && catalog[0].audioPath?.startsWith('/media/'));
   if (!prepared(await ready('/v2/catalog'))) {
     await launch(process.execPath, ['--import', 'tsx', 'scripts/import-lenny.mts']);
   }
   if (!prepared(await ready('/v2/catalog'))) throw new Error('Restart the existing backend to load the current Lenny collection.');
-  console.log('Lenny is ready. Tap “Hey Murmur” on Home and say “Play Lenny.”');
+  console.log('Lenny is ready. Open Murmur, allow microphone access, and say “Play Lenny.” Say “Hey Murmur” to wake listening again.');
   await launch('./script/build_and_run.sh', [process.argv[2] ?? 'start'], { ...process.env,
     MURMUR_SERVICES_STARTED: '1', MURMUR_BACKEND_URL: backend,
   });

@@ -21,12 +21,18 @@ function extractAnswer(payload: Record<string, unknown>): string {
 export async function requestOpenAIExploreAnswer(input: ExploreRequest, options: {
   apiKey: string; model?: string; fetchImpl?: typeof fetch; timeoutMs?: number; signal?: AbortSignal; instructions?: string;
 }): Promise<OpenAIExploreResult> {
+  return requestOpenAIText(buildExploreInput(input), { ...options, instructions: options.instructions ?? EXPLORE_SYSTEM_INSTRUCTIONS });
+}
+
+export async function requestOpenAIText(input: string, options: {
+  apiKey: string; model?: string; fetchImpl?: typeof fetch; timeoutMs?: number; signal?: AbortSignal; instructions: string;
+}): Promise<OpenAIExploreResult> {
   const model = options.model?.trim() || DEFAULT_OPENAI_RESPONSE_MODEL;
   return requestUpstream('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model, instructions: options.instructions ?? EXPLORE_SYSTEM_INSTRUCTIONS, input: buildExploreInput(input),
+      model, instructions: options.instructions, input,
       store: false, reasoning: { effort: 'low' }, text: { verbosity: 'low' },
       // Includes reasoning tokens; the prompt still asks for a short spoken answer.
       max_output_tokens: 1200,

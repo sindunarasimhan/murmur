@@ -17,6 +17,7 @@ import { VoiceGateway } from './voice-gateway';
 import { ContinuousVoiceGateway } from './continuous-voice';
 import { CatalogService } from './catalog-service';
 import { createCatalogInterpreter, type CatalogInterpreter } from './catalog-interpreter';
+import { createCatalogInvitation, type CatalogInvitation } from './catalog-invitation';
 
 function bearer(request: FastifyRequest) {
   const authorization = request.headers.authorization;
@@ -24,13 +25,14 @@ function bearer(request: FastifyRequest) {
   return request.headers.cookie?.split(';').map((value) => value.trim()).find((value) => value.startsWith('murmur_identity='))?.slice('murmur_identity='.length);
 }
 const sessionId = (request: FastifyRequest) => z.uuid().parse((request.params as { id: string }).id);
-export async function createApp(options: { config: BackendConfig; pool: Pool; objects: ObjectStore; intelligence?: Intelligence; catalogInterpreter?: CatalogInterpreter; speech?: typeof synthesizeAudio }) {
+export async function createApp(options: { config: BackendConfig; pool: Pool; objects: ObjectStore; intelligence?: Intelligence; catalogInterpreter?: CatalogInterpreter; invitation?: CatalogInvitation; speech?: typeof synthesizeAudio }) {
   const { config, pool, objects } = options;
   const repository = new Repository(pool, config);
   const listening = new ListeningService(repository, options.intelligence ?? createIntelligence(config));
   const voice = new VoiceGateway(repository, config);
   const continuousVoice = new ContinuousVoiceGateway(repository, config);
   const catalog = new CatalogService(repository, options.catalogInterpreter ?? createCatalogInterpreter(config.providers.typesafe));
+  const invitation = options.invitation ?? createCatalogInvitation(config.providers.openai);
   const app = Fastify({ logger: false, bodyLimit: 16 * 1024, requestTimeout: 30_000 });
   await app.register(websocket, { options: { maxPayload: 128 * 1024 } });
   app.addHook('onRequest', async (request, reply) => {
@@ -70,6 +72,15 @@ export async function createApp(options: { config: BackendConfig; pool: Pool; ob
   });
   app.get('/v2/episode', () => repository.episode());
   app.get('/v2/catalog', () => repository.catalog());
+  app.get('/v2/catalog/:episodeId/captions', async (request) => {
+    await owner(request);
+    const id = z.string().regex(/^(small-places|lenny-[a-z0-9_-]+)$/).parse((request.params as { episodeId: string }).episodeId);
+    const { audioVersion } = z.object({ audioVersion: z.string().regex(/^[a-f0-9]{64}$/) }).parse(request.query);
+    const episode = await repository.episode(id);
+    if (episode.audioVersion !== audioVersion) throw new ServiceError(409, 'audio_changed', 'The recording changed. Reopen the episode to load matching captions.');
+    const result = await pool.query('SELECT start_seconds AS "startSeconds",end_seconds AS "endSeconds",text FROM transcript_segments WHERE episode_id=$1 AND audio_version=$2 ORDER BY start_seconds,id', [id, audioVersion]);
+    return { audioVersion, cues: result.rows };
+  });
   app.get('/v2/catalog/:episodeId', (request) => repository.episode(z.string().regex(/^lenny-[a-z0-9_-]+$/).parse((request.params as { episodeId: string }).episodeId)));
   app.post('/v2/catalog/resolve', async (request, reply) => {
     const input = z.object({ utterance: z.string().trim().min(1).max(1000), currentEpisodeId: z.string().optional(), history: z.array(z.string().max(2000)).max(4).default([]) }).strict().parse(request.body);
@@ -79,7 +90,31 @@ export async function createApp(options: { config: BackendConfig; pool: Pool; ob
     try { return await catalog.resolve(await owner(request), input.utterance, input.currentEpisodeId, input.history, controller.signal); }
     finally { reply.raw.off('close', disconnect); }
   });
+  app.post('/v2/catalog/invite', async (request, reply) => {
+    const { history } = z.object({ history: z.array(z.string().max(2000)).max(4).default([]) }).strict().parse(request.body);
+    await repository.charge(await owner(request));
+    const controller = new AbortController();
+    const disconnect = () => { if (!reply.raw.writableEnded) controller.abort(); };
+    reply.raw.on('close', disconnect);
+    try { return { message: await invitation(history, controller.signal) }; }
+    finally { reply.raw.off('close', disconnect); }
+  });
   app.post('/v2/live-voice-ticket', async (request) => continuousVoice.ticket(await owner(request)));
+  app.post('/v2/speech', async (request, reply) => {
+    const { text } = z.object({ text: z.string().trim().min(1).max(4000) }).strict().parse(request.body);
+    const ownerId = await owner(request);
+    if (!config.providers.openai.apiKey) throw new ServiceError(503, 'speech_unconfigured', 'Spoken audio is unavailable.');
+    await repository.charge(ownerId);
+    const controller = new AbortController();
+    const disconnect = () => { if (!reply.raw.writableEnded) controller.abort(); };
+    reply.raw.on('close', disconnect);
+    try {
+      const bytes = await (options.speech ?? synthesizeAudio)(text, {
+        config: { ...config.providers.openai, apiKey: config.providers.openai.apiKey }, signal: controller.signal,
+      });
+      return reply.type('audio/mpeg').header('X-Murmur-Voice-Disclosure', 'ai-generated').send(Buffer.from(bytes));
+    } finally { reply.raw.off('close', disconnect); }
+  });
   app.delete('/v2/live-voice', async (request) => { continuousVoice.cancel(await owner(request)); return { stopped: true }; });
   app.post('/v2/sessions', async (request) => {
     const input = z.object({ episodeId: z.string().regex(/^(small-places|lenny-[a-z0-9_-]+)$/) }).strict().parse(request.body);

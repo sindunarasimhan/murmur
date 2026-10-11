@@ -2,6 +2,54 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { handleRealtimeTokenRequest } from '@/server/openai-realtime/handler';
+import { createTranscriptionSession } from './provider';
+
+test('semantic transcription uses the documented low-eagerness configuration without client-timed model fields', async () => {
+  let input: { turn_detection: unknown; transcription: Record<string, unknown> } | undefined;
+  await createTranscriptionSession('episode', {
+    apiKey: 'test', model: 'gpt-4o-transcribe', turnDetection: 'semantic',
+    keywords: ['Brian Halligan', 'Lenny’s Podcast'], signal: new AbortController().signal,
+    fetch: async (_url, init) => {
+      input = JSON.parse(String(init?.body)).session.audio.input;
+      return Response.json({ value: 'ek_fixture', expires_at: Math.floor(Date.now() / 1000) + 600 });
+    },
+  });
+  assert.deepEqual(input?.turn_detection, { type: 'semantic_vad', eagerness: 'low' });
+  assert.equal(input?.transcription.model, 'gpt-4o-transcribe');
+  assert.equal(input?.transcription.language, 'en');
+  assert.equal(input?.transcription.delay, undefined);
+  assert.equal(input?.transcription.keywords, undefined);
+  assert.match(String(input?.transcription.prompt), /Brian Halligan/);
+});
+
+test('transcription receives bounded literal catalog vocabulary without invalid keywords', async () => {
+  let input: Record<string, unknown> | undefined;
+  await createTranscriptionSession('episode', {
+    apiKey: 'test', model: 'gpt-live-transcribe', signal: new AbortController().signal,
+    keywords: ['Brian Halligan', 'Lenny’s Podcast', 'Brian Halligan', '', 'bad\nkeyword', '<invalid>'],
+    fetch: async (_url, init) => {
+      input = JSON.parse(String(init?.body)).session.audio.input.transcription;
+      return Response.json({ value: 'ek_fixture', expires_at: Math.floor(Date.now() / 1000) + 600 });
+    },
+  });
+  assert.deepEqual(input?.keywords, ['Hey Murmur', 'Brian Halligan', 'Lenny’s Podcast']);
+  assert.equal(input?.delay, 'minimal');
+});
+
+test('semantic catalog context stays within the provider prompt limit without splitting names', async () => {
+  let prompt = '';
+  const names = Array.from({ length: 100 }, (_, i) => `Guest ${i} ${'long '.repeat(15)}`.trim());
+  await createTranscriptionSession('episode', {
+    apiKey: 'test', model: 'gpt-4o-transcribe', turnDetection: 'semantic', keywords: names,
+    signal: new AbortController().signal,
+    fetch: async (_url, init) => {
+      prompt = JSON.parse(String(init?.body)).session.audio.input.transcription.prompt;
+      return Response.json({ value: 'ek_fixture', expires_at: Math.floor(Date.now() / 1000) + 600 });
+    },
+  });
+  assert(prompt.length <= 1024);
+  assert(names.includes(prompt.split('\n').at(-1)!));
+});
 
 function tokenRequest(
   surface: 'discovery' | 'episode' = 'discovery',

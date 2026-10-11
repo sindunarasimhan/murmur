@@ -1,7 +1,9 @@
 import {
   setAudioModeAsync,
+  setIsAudioActiveAsync,
   useAudioPlayer,
   useAudioPlayerStatus,
+  useAudioSampleListener,
   type AudioMode,
 } from 'expo-audio';
 import { File, Paths } from 'expo-file-system';
@@ -9,6 +11,8 @@ import * as Speech from 'expo-speech';
 import { useCallback, useEffect, useRef } from 'react';
 
 import { PLAYBACK_AUDIO_MODE } from '@/features/listening/audio-mode';
+import { speechEnergy } from './speech-energy';
+import { startPreparedSpeech } from './start-prepared-speech';
 import {
   MurmurApiError,
   synthesizeSpeech,
@@ -18,6 +22,8 @@ import {
 type AssistantVoiceOptions = {
   signal?: AbortSignal;
   onDone?: () => void;
+  onStart?: () => void;
+  onError?: (error: Error) => void;
   loadSpeech?: (signal?: AbortSignal) => Promise<SynthesizedSpeech>;
 };
 
@@ -32,6 +38,8 @@ type ActiveCompletion = {
   kind: 'device' | 'remote';
   started: boolean;
   onDone?: () => void;
+  onStart?: () => void;
+  onError?: (error: Error) => void;
 };
 
 function playbackWatchdogMilliseconds(text: string): number {
@@ -58,14 +66,22 @@ function prepareAudio(speech: SynthesizedSpeech): PreparedAudio {
   };
 }
 
-export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnouncements = false }: { audioMode?: AudioMode; deviceAnnouncements?: boolean } = {}) {
-  const player = useAudioPlayer(null, { updateInterval: 120 });
+export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnouncements = false, keepAudioSessionActive = false, remoteOnly = false, onLevel }: { audioMode?: AudioMode; deviceAnnouncements?: boolean; keepAudioSessionActive?: boolean; remoteOnly?: boolean; onLevel?: (level: number) => void } = {}) {
+  const player = useAudioPlayer(null, { updateInterval: 120, keepAudioSessionActive });
   const status = useAudioPlayerStatus(player);
   const sessionRef = useRef(0);
   const completionRef = useRef<ActiveCompletion | undefined>(undefined);
   const preparedAudioRef = useRef<{ session: number; audio: PreparedAudio } | undefined>(undefined);
   const watchdogTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const startTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const levelCallback = useRef(onLevel);
+  const lastLevelAt = useRef(0);
+  useEffect(() => { levelCallback.current = onLevel; }, [onLevel]);
+  useAudioSampleListener(player, (sample) => {
+    if (!completionRef.current?.started || Date.now() - lastLevelAt.current < 65) return;
+    lastLevelAt.current = Date.now();
+    levelCallback.current?.(speechEnergy(sample.channels));
+  });
 
   const clearWatchdog = useCallback(() => {
     if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
@@ -84,9 +100,10 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
   }, []);
 
   const finish = useCallback(
-    (session: number) => {
+    (session: number, error?: Error) => {
       const completion = completionRef.current;
       if (!completion || completion.session !== session || sessionRef.current !== session) return;
+      if (__DEV__) console.info('[murmur-speech] completion', { session, started: completion.started, failed: Boolean(error) });
 
       completionRef.current = undefined;
       clearWatchdog();
@@ -97,7 +114,8 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
         // The player can already be released during navigation cleanup.
       }
       clearPreparedAudio(session);
-      completion.onDone?.();
+      if (error) completion.onError?.(error);
+      else completion.onDone?.();
     },
     [clearPreparedAudio, clearStartTimer, clearWatchdog, player],
   );
@@ -120,6 +138,11 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
     (session: number, text: string) => {
       const completion = completionRef.current;
       if (!completion || completion.session !== session || sessionRef.current !== session) return;
+
+      if (remoteOnly) {
+        finish(session, new Error('Murmur’s voice could not play. The response is still on screen.'));
+        return;
+      }
 
       completion.kind = 'device';
       completion.started = true;
@@ -151,7 +174,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
         finish(session);
       }
     },
-    [clearPreparedAudio, clearStartTimer, clearWatchdog, finish, player],
+    [clearPreparedAudio, clearStartTimer, clearWatchdog, finish, player, remoteOnly],
   );
 
   useEffect(() => {
@@ -159,11 +182,14 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
     if (!completion || completion.kind !== 'remote') return;
 
     if (status.playing) {
+      if (__DEV__ && !completion.started) console.info('[murmur-speech] playback-started', { session: completion.session });
+      if (!completion.started) completion.onStart?.();
       completion.started = true;
       clearStartTimer();
     }
 
     if (status.error) {
+      if (__DEV__) console.info('[murmur-speech] native-playback-error', { session: completion.session });
       startDeviceSpeech(completion.session, completion.text);
     } else if (status.didJustFinish && completion.started) {
       finish(completion.session);
@@ -182,7 +208,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
   const speak = useCallback(
     async (
       text: string,
-      { signal, onDone, loadSpeech }: AssistantVoiceOptions = {},
+      { signal, onDone, onStart, onError, loadSpeech }: AssistantVoiceOptions = {},
     ): Promise<'device' | 'openai'> => {
       await stop();
       if (signal?.aborted) {
@@ -198,7 +224,10 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
       const session = sessionRef.current + 1;
       sessionRef.current = session;
 
-      if ((process.env.EXPO_OS !== 'web' || deviceAnnouncements) && !loadSpeech) {
+      if (!remoteOnly && (process.env.EXPO_OS !== 'web' || deviceAnnouncements) && !loadSpeech) {
+        await setAudioModeAsync(audioMode);
+        await setIsAudioActiveAsync(true);
+        if (sessionRef.current !== session || signal?.aborted) throw new Error('Assistant speech was cancelled.');
         completionRef.current = {
           session,
           text,
@@ -211,7 +240,9 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
       }
 
       try {
-        const speech = await (loadSpeech ? loadSpeech(signal) : synthesizeSpeech(`Murmur. ${text}`, { signal }));
+        if (__DEV__) console.info('[murmur-speech] requesting', { session });
+        const speech = await (loadSpeech ? loadSpeech(signal) : synthesizeSpeech(text, { signal }));
+        if (__DEV__) console.info('[murmur-speech] audio-received', { session, bytes: speech.audio.byteLength });
         if (sessionRef.current !== session || signal?.aborted) {
           throw new MurmurApiError('Assistant speech was cancelled.', {
             kind: 'cancelled',
@@ -224,7 +255,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
 
         const prepared = prepareAudio(speech);
         preparedAudioRef.current = { session, audio: prepared };
-        await setAudioModeAsync(audioMode).catch(() => undefined);
+        await setAudioModeAsync(audioMode);
         if (sessionRef.current !== session || signal?.aborted) {
           prepared.cleanup();
           if (preparedAudioRef.current?.audio === prepared) preparedAudioRef.current = undefined;
@@ -244,10 +275,12 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
           kind: 'remote',
           started: false,
           onDone,
+          onStart,
+          onError,
         };
         clearWatchdog();
         watchdogTimerRef.current = setTimeout(
-          () => finish(session),
+          () => finish(session, remoteOnly ? new Error('Murmur’s voice playback timed out. The response is still on screen.') : undefined),
           playbackWatchdogMilliseconds(text),
         );
         clearStartTimer();
@@ -259,14 +292,19 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
               completion.kind === 'remote' &&
               !completion.started
             ) {
+              if (__DEV__) console.info('[murmur-speech] start-timeout', { session, loaded: player.isLoaded, playing: player.playing });
               startDeviceSpeech(session, text);
             }
           },
           process.env.EXPO_OS === 'web' ? 1_800 : 3_500,
         );
-        player.play();
+        await startPreparedSpeech(player, () => sessionRef.current === session && completionRef.current?.session === session && !signal?.aborted);
         return 'openai';
       } catch (error) {
+        if (__DEV__) console.info('[murmur-speech] request-or-setup-failed', {
+          session, cancelled: Boolean(signal?.aborted || sessionRef.current !== session),
+          status: error instanceof MurmurApiError ? error.status : undefined,
+        });
         if (
           signal?.aborted ||
           (error instanceof MurmurApiError && error.kind === 'cancelled') ||
@@ -281,6 +319,11 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
           throw error;
         }
 
+        if (remoteOnly) {
+          clearStartTimer(); clearWatchdog(); clearPreparedAudio(session);
+          completionRef.current = undefined;
+          throw error;
+        }
         completionRef.current = {
           session,
           text,
@@ -302,6 +345,7 @@ export function useAssistantVoice({ audioMode = PLAYBACK_AUDIO_MODE, deviceAnnou
       stop,
       audioMode,
       deviceAnnouncements,
+      remoteOnly,
     ],
   );
 

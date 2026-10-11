@@ -2,7 +2,8 @@ import { readBoundedBody } from '@/server/http/read-bounded-body';
 
 // Same-origin HTTP bridge. The dedicated service owns authentication and application state.
 async function proxy(request: Request): Promise<Response> {
-  const path = new URL(request.url).pathname;
+  const url = new URL(request.url);
+  const path = url.pathname;
   if (!path.startsWith('/api/v2/')) return new Response(null, { status: 404 });
   const headers = new Headers();
   for (const name of ['authorization', 'cookie', 'content-type', 'x-murmur-client', 'range']) {
@@ -18,7 +19,7 @@ async function proxy(request: Request): Promise<Response> {
     const signal = AbortSignal.any([request.signal, media ? headerDeadline.signal : AbortSignal.timeout(30_000)]);
     const body = ['GET', 'HEAD'].includes(request.method) ? undefined : await readBoundedBody(request, 16 * 1024, signal);
     if (body && !body.ok) return Response.json({ error: { code: 'too_large', message: 'That request is too large.' } }, { status: 413 });
-    const upstream = await fetch(`${process.env.MURMUR_BACKEND_URL ?? 'http://127.0.0.1:4545'}${path.slice('/api'.length)}`, {
+    const upstream = await fetch(`${process.env.MURMUR_BACKEND_URL ?? 'http://127.0.0.1:4545'}${path.slice('/api'.length)}${url.search}`, {
       method: request.method, headers,
       body: body?.ok ? body.bytes : undefined,
       signal, redirect: 'error',

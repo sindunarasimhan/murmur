@@ -1,0 +1,15 @@
+*
+!Dockerfile.backend
+!package.json
+!package-lock.json
+!backend/
+!backend/**
+!shared/
+!shared/**
+!src/
+!src/**
+!scripts/
+!scripts/import-public-transcripts.mts
+**/*.test.ts
+**/.env*
+**/*.log

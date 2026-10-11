@@ -14,6 +14,8 @@ To try the ad break without waiting: play the episode, then say **“Hey Murmur,
 
 Home has one activation button. The episode screen has artwork, captions, microphone status, and passive progress; neither screen has playback buttons, a scrubber, or typed input.
 
+The player keeps the guest name and a short Playing / Paused status. Voice prompts and the microphone disclosure stay on the start screen; active conversations and errors still appear when needed. The full episode title remains available to screen readers.
+
 The initial tap enables **continuous cloud transcription**, not an offline wake-word detector. Microphone audio goes to OpenAI while the foreground listening session is active, including during podcast playback. The screen discloses this before activation. Raw microphone recordings are not stored by Murmur. This uses provider credits for the duration of listening; local wake-word detection is future work.
 
 ## Run

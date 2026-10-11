@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { adPlanSchema } from './ad-plan';
 
 export const positionSchema = z.number().finite().min(0).max(86_400);
 export const snapshotSchema = z.object({
@@ -22,8 +23,16 @@ export type Evidence = z.infer<typeof evidenceSchema>;
 export type Observation = z.infer<typeof observationSchema>;
 export type TurnRequest = z.infer<typeof turnRequestSchema>;
 export const actionSchema = z.object({
-  id: z.uuid(), kind: z.enum(['play', 'pause', 'seek', 'return', 'skip-ad']),
+  id: z.uuid(), kind: z.enum(['play', 'pause', 'seek', 'return', 'skip-ad', 'skip-intro', 'set-ad-skipping']),
   positionSeconds: positionSchema, play: z.boolean(),
+  enabled: z.boolean().optional(), plan: adPlanSchema.optional(),
+}).superRefine((action, context) => {
+  if (action.kind === 'set-ad-skipping' && (action.enabled === undefined || action.plan === undefined)) {
+    context.addIssue({ code: 'custom', message: 'Ad skipping action requires enabled and plan' });
+  }
+  if (action.kind !== 'set-ad-skipping' && (action.enabled !== undefined || action.plan !== undefined)) {
+    context.addIssue({ code: 'custom', message: 'Ad policy only belongs to its assignment action' });
+  }
 });
 export type PlaybackAction = z.infer<typeof actionSchema>;
 export const sessionSchema = z.object({
@@ -31,6 +40,7 @@ export const sessionSchema = z.object({
   positionSeconds: positionSchema, bookmarkSeconds: positionSchema.nullable(),
   phase: z.enum(['paused', 'playing', 'listening', 'resolving', 'speaking', 'exploring']),
   pendingAction: actionSchema.nullable(),
+  adSkipping: z.boolean().optional(),
 });
 export type ListeningSession = z.infer<typeof sessionSchema>;
 export const turnResultSchema = z.object({
@@ -49,8 +59,13 @@ export const episodeSchema = z.object({
   sourceUrl: z.string().nullable().optional(), artworkUrl: z.string().nullable().optional(),
 });
 export type PreparedEpisode = z.infer<typeof episodeSchema>;
+export const captionTrackSchema = z.object({
+  audioVersion: z.string().regex(/^[a-f0-9]{64}$/),
+  cues: z.array(z.object({ startSeconds: positionSchema, endSeconds: positionSchema, text: z.string() })),
+});
+export type CaptionTrack = z.infer<typeof captionTrackSchema>;
 export const catalogResolutionSchema = z.object({
-  kind: z.enum(['play', 'current', 'clarify', 'stop', 'home']),
+  kind: z.enum(['play', 'current', 'clarify', 'stop', 'home', 'cancel']),
   episode: episodeSchema.optional(), message: z.string(),
 });
 export type CatalogResolution = z.infer<typeof catalogResolutionSchema>;

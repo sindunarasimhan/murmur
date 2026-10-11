@@ -3,19 +3,21 @@ import type { Pool, PoolClient } from 'pg';
 import { sessionSchema, type ListeningSession, type Observation, type TurnRequest, type TurnResult, type PreparedEpisode, type Evidence } from '../shared/listening';
 import { transaction } from './database';
 import { ServiceError, missing, stale } from './errors';
-import { resolveAd, type AdResolution } from './ad-policy';
+import { recordingAdPlan, resolvePlannedAd, type AdResolution } from './ad-policy';
+import { validatedAdPlan, type AdPlan } from '../shared/ad-plan';
+import { resolveIntro, type IntroResolution } from './intro-policy';
 
 const sessionColumns = `id, episode_id AS "episodeId", audio_version AS "audioVersion", revision,
   position_seconds AS "positionSeconds", bookmark_seconds AS "bookmarkSeconds", phase,
-  pending_action AS "pendingAction"`;
+  pending_action AS "pendingAction", ad_skipping AS "adSkipping"`;
 export const hashToken = (value: string) => createHash('sha256').update(value).digest('hex');
 
 export class Repository {
-  constructor(readonly pool: Pool, private readonly limits: { dailyUserCalls: number; dailyProjectCalls: number; focusEpisodeId?: string | null }) {}
+  constructor(readonly pool: Pool, private readonly limits: { dailyUserCalls: number; dailyProjectCalls: number; dailyIdentityCreates?: number; focusEpisodeId?: string | null }) {}
 
   private async bucket(client: PoolClient, scope: string, limit: number) {
     const result = await client.query(`INSERT INTO usage_buckets(scope,calls) VALUES($1,1)
-      ON CONFLICT(scope,day) DO UPDATE SET calls=usage_buckets.calls+1 WHERE usage_buckets.calls < $2 RETURNING calls`, [scope, limit]);
+      ON CONFLICT(scope,day) DO UPDATE SET calls=usage_buckets.calls+1 WHERE $2 = 0 OR usage_buckets.calls < $2 RETURNING calls`, [scope, limit]);
     if (!result.rowCount) throw new ServiceError(429, 'daily_limit', 'The daily testing allowance has been reached. Please try again tomorrow.');
   }
   async charge(owner: string, client?: PoolClient) {
@@ -27,7 +29,7 @@ export class Repository {
   }
   async createIdentity(ip: string) {
     return transaction(this.pool, async (client) => {
-      await this.bucket(client, `signup:${hashToken(ip)}`, 20);
+      await this.bucket(client, `signup:${hashToken(ip)}`, this.limits.dailyIdentityCreates ?? 0);
       const id = randomUUID();
       const token = randomBytes(32).toString('base64url');
       await client.query('INSERT INTO identities(id,token_hash) VALUES($1,$2)', [id, hashToken(token)]);
@@ -62,21 +64,36 @@ export class Repository {
     return rows.rows[0] ? this.episode(rows.rows[0].id) : undefined;
   }
   async currentAd(session: ListeningSession): Promise<AdResolution> {
-    const result = await this.pool.query('SELECT ad_breaks,audio_key,duration_seconds FROM episodes WHERE id=$1 AND audio_version=$2', [session.episodeId, session.audioVersion]);
-    const position = session.bookmarkSeconds ?? session.positionSeconds;
+    const plan = session.adSkipping ? await this.activeAdPlan(session) ?? await this.adPlan(session) : await this.adPlan(session);
+    return resolvePlannedAd(session.bookmarkSeconds ?? session.positionSeconds, plan);
+  }
+  async adPlan(session: ListeningSession): Promise<AdPlan> {
+    const result = await this.pool.query('SELECT ad_plan,ad_breaks,audio_key,duration_seconds FROM episodes WHERE id=$1 AND audio_version=$2', [session.episodeId, session.audioVersion]);
     const episode = result.rows[0];
-    return episode ? resolveAd(position, episode.duration_seconds, session.audioVersion, episode.ad_breaks, episode.audio_key) : { kind: 'unverified' };
+    return episode ? recordingAdPlan(session.audioVersion, episode.duration_seconds, episode.ad_plan, episode.ad_breaks, episode.audio_key)
+      : { audioVersion: session.audioVersion, revision: 1, status: 'unavailable', intervals: [] };
+  }
+  async activeAdPlan(session: ListeningSession): Promise<AdPlan | null> {
+    const result = await this.pool.query('SELECT s.active_ad_plan,e.duration_seconds FROM listening_sessions s JOIN episodes e ON e.id=s.episode_id AND e.audio_version=s.audio_version WHERE s.id=$1 AND s.audio_version=$2 AND s.ad_skipping', [session.id, session.audioVersion]);
+    const row = result.rows[0];
+    return row ? validatedAdPlan(row.active_ad_plan, session.audioVersion, row.duration_seconds) : null;
+  }
+  async currentIntro(session: ListeningSession): Promise<IntroResolution> {
+    const result = await this.pool.query('SELECT intro_boundary,audio_key,duration_seconds FROM episodes WHERE id=$1 AND audio_version=$2', [session.episodeId, session.audioVersion]);
+    const episode = result.rows[0];
+    return episode ? resolveIntro(session.bookmarkSeconds ?? session.positionSeconds, episode.duration_seconds, session.audioVersion, episode.intro_boundary, episode.audio_key) : { kind: 'unverified' };
   }
   async openSession(owner: string, episodeId: string): Promise<ListeningSession> {
     const result = await this.pool.query(`INSERT INTO listening_sessions(id,owner_id,episode_id,audio_version)
       SELECT $1,$2,id,audio_version FROM episodes WHERE id=$3 AND status='ready'
       ON CONFLICT(owner_id,episode_id) DO UPDATE SET updated_at=now(),
+        ad_skipping=false,active_ad_plan=NULL,
         audio_version=EXCLUDED.audio_version,
         position_seconds=CASE WHEN listening_sessions.audio_version=EXCLUDED.audio_version THEN listening_sessions.position_seconds ELSE 0 END,
         bookmark_seconds=CASE WHEN listening_sessions.audio_version=EXCLUDED.audio_version THEN listening_sessions.bookmark_seconds ELSE NULL END,
-        revision=listening_sessions.revision+CASE WHEN listening_sessions.audio_version=EXCLUDED.audio_version THEN 0 ELSE 1 END,
-        phase=CASE WHEN listening_sessions.audio_version=EXCLUDED.audio_version THEN listening_sessions.phase ELSE 'paused' END,
-        pending_action=CASE WHEN listening_sessions.audio_version=EXCLUDED.audio_version THEN listening_sessions.pending_action ELSE NULL END
+        revision=listening_sessions.revision+CASE WHEN listening_sessions.audio_version<>EXCLUDED.audio_version OR listening_sessions.ad_skipping OR listening_sessions.pending_action->>'kind'='set-ad-skipping' THEN 1 ELSE 0 END,
+        phase=CASE WHEN listening_sessions.audio_version=EXCLUDED.audio_version AND COALESCE(listening_sessions.pending_action->>'kind','')<>'set-ad-skipping' THEN listening_sessions.phase ELSE 'paused' END,
+        pending_action=CASE WHEN listening_sessions.audio_version=EXCLUDED.audio_version AND COALESCE(listening_sessions.pending_action->>'kind','')<>'set-ad-skipping' THEN listening_sessions.pending_action ELSE NULL END
       RETURNING ${sessionColumns}`, [randomUUID(), owner, episodeId]);
     if (!result.rows[0]) throw new ServiceError(409, 'preparing', 'This episode is still being prepared.');
     return sessionSchema.parse(result.rows[0]);
@@ -151,13 +168,29 @@ export class Repository {
   async acknowledge(owner: string, id: string, input: { revision: number; audioVersion: string; actionId: string; positionSeconds: number }) {
     return transaction(this.pool, async (client) => {
       const session = await this.session(owner, id, client, true);
+      const previous = await client.query(`SELECT result->'adAcknowledgement' AS acknowledgement FROM conversation_turns
+        WHERE session_id=$1 AND result#>>'{action,id}'=$2 AND result#>>'{action,kind}'='set-ad-skipping'`, [id, input.actionId]);
+      const acknowledged = previous.rows[0]?.acknowledgement;
+      if (acknowledged) {
+        const prior = acknowledged.input;
+        if (prior.revision !== input.revision || prior.audioVersion !== input.audioVersion || prior.positionSeconds !== input.positionSeconds
+          || acknowledged.session.revision !== session.revision) throw stale();
+        return session;
+      }
       await this.validateSnapshot(client, session, input);
       const action = session.pendingAction;
-      const tolerance = action?.kind === 'skip-ad' ? 0.25 : 1;
-      if (!action || action.id !== input.actionId || Math.abs(action.positionSeconds - input.positionSeconds) > tolerance || action.kind === 'skip-ad' && input.positionSeconds < action.positionSeconds - 0.05) throw stale();
+      const boundedSkip = action?.kind === 'skip-ad' || action?.kind === 'skip-intro';
+      const tolerance = boundedSkip ? 0.25 : 1;
+      const delta = action ? input.positionSeconds - action.positionSeconds : 0;
+      if (!action || action.id !== input.actionId || (action.kind === 'pause' ? delta < -1 : Math.abs(delta) > tolerance) || boundedSkip && delta < -0.05) throw stale();
       const result = await client.query(`UPDATE listening_sessions SET revision=revision+1,position_seconds=$2,bookmark_seconds=NULL,
-        phase=$3,pending_action=NULL,updated_at=now() WHERE id=$1 RETURNING ${sessionColumns}`, [id, input.positionSeconds, action.play ? 'playing' : 'paused']);
-      return sessionSchema.parse(result.rows[0]);
+        phase=$3,pending_action=NULL,ad_skipping=CASE WHEN $4::boolean IS NULL THEN ad_skipping ELSE $4 END,
+        active_ad_plan=CASE WHEN $4::boolean IS NULL THEN active_ad_plan ELSE $5::jsonb END,updated_at=now() WHERE id=$1 RETURNING ${sessionColumns}`, [id, input.positionSeconds, action.play ? 'playing' : 'paused', action.kind === 'set-ad-skipping' ? action.enabled : null, action.kind === 'set-ad-skipping' && action.enabled ? JSON.stringify(action.plan) : null]);
+      const updated = sessionSchema.parse(result.rows[0]);
+      if (action.kind === 'set-ad-skipping') await client.query(`UPDATE conversation_turns
+        SET result=jsonb_set(result,'{adAcknowledgement}',$3::jsonb)
+        WHERE session_id=$1 AND result#>>'{action,id}'=$2`, [id, action.id, JSON.stringify({ input, session: updated })]);
+      return updated;
     });
   }
   async evidence(session: ListeningSession, question: string): Promise<Evidence[]> {
@@ -170,11 +203,22 @@ export class Repository {
       CASE WHEN start_seconds <= $3 AND end_seconds >= $3 THEN 0 ELSE 1 END,
       ts_rank(search,websearch_to_tsquery('english',$4)) DESC, abs(start_seconds-$3) LIMIT 8`,
     [session.episodeId, session.audioVersion, session.bookmarkSeconds ?? session.positionSeconds, search]);
-    return result.rows;
+    const previous = await this.pool.query(`SELECT p.id,p.start_seconds AS "startSeconds",p.end_seconds AS "endSeconds",p.text
+      FROM (
+        SELECT t.result FROM conversation_turns t WHERE t.session_id=$1 AND t.status='complete'
+        AND t.result#>>'{session,audioVersion}'=$3 AND jsonb_array_length(t.result->'evidence') > 0
+        AND (t.result#>>'{session,bookmarkSeconds}')::double precision = $4
+        AND t.result->>'answer' <> '' ORDER BY t.created_at DESC LIMIT 1
+      ) prior CROSS JOIN LATERAL jsonb_array_elements(prior.result->'evidence') WITH ORDINALITY AS e(value,ord)
+      JOIN transcript_segments p ON p.episode_id=$2 AND p.audio_version=$3 AND p.id=e.value->>'id'
+      ORDER BY e.ord LIMIT 3`, [session.id, session.episodeId, session.audioVersion, session.bookmarkSeconds]);
+    const candidates: Evidence[] = result.rows;
+    return [...candidates, ...previous.rows.filter((item: Evidence) => !candidates.some((candidate) => candidate.id === item.id))];
   }
   async history(sessionId: string): Promise<{ question: string; answer: string }[]> {
     const result = await this.pool.query(`SELECT t.question,t.result->>'answer' AS answer FROM conversation_turns t
       JOIN listening_sessions s ON s.id=t.session_id AND t.result#>>'{session,audioVersion}'=s.audio_version
+      AND (t.result#>>'{session,bookmarkSeconds}')::double precision = s.bookmark_seconds
       WHERE t.session_id=$1 AND t.status='complete' AND t.result->>'answer' <> '' ORDER BY t.created_at DESC LIMIT 5`, [sessionId]);
     return result.rows.reverse();
   }

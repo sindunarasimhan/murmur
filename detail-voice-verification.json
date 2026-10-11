@@ -1,0 +1,51 @@
+{
+  "status": "not_complete",
+  "scope": "Home selection through detail commands, conversation, background recovery, and return home",
+  "interactionPolicy": "Detail mascot tap opens one request and pauses immediately. Answer completion restores prior playback and closes the request, without a twenty-second follow-up window. Explicit pause stays paused. Ad skip confirms before seeking, then restores its prior playing/paused intent. Silence and backgrounding cancel unfinished collection. Wake remains an optional existing path; physical foreground capture still waits for wake after a tap request closes.",
+  "software": {
+    "typecheck": "passed",
+    "lint": "passed",
+    "unitTests": { "passed": 314, "failed": 0 },
+    "backendTests": { "passed": 38, "failed": 0, "liveSkippedByDefault": 5 },
+    "iosJavaScriptExport": "passed; not a native device run",
+    "renderedPreview": "Updated listening, playing and home layouts inspected at a 390 by 844 browser viewport. Detail artwork and captions are above the larger lower mascot. Browser fixture has no real audio; native tap hit testing, animation and safe-area layout still need phone verification.",
+    "tapFlow": "Unit coverage includes immediate pause, unprefixed question, exact auto-resume, explicit pause, silent timeout, already-paused question, episode switch, return home, background cancellation, home invitation and confirmation-before-seek for ad skipping from both playing and paused states. Four-guest live text flow passed with tap-to-resume, real generated reply bytes and media range requests; native player simulated.",
+    "liveTextFlow": "Two full text-driven flows passed after pause-on-wake, including the final controller revision",
+    "liveSemanticTests": { "passed": 12, "failed": 0, "skipped": 0, "catalogContextRounds": 2 },
+    "liveQuietAudioFlow": "Prior ducking version passed the full generated-PCM flow. The pause-on-wake version has not yet repeated this quiet-audio matrix.",
+    "liveOverlappingAudioFlow": "Pause-on-wake compound command FAILED when transcription omitted Murmur itself. Earlier minimal and medium delay runs also failed; medium was reverted. These failures are not counted as passes.",
+    "liveSeparateWakeFlow": "FAILED twice at end-to-home. Mixed audio with separate wake passed pause/resume, contextual questions, follow-ups, reviewed ad skip, paused skip, and background/reopen. Final end the stream was transcribed as Nd the stream or And the stream and routed to clarification. Neither is counted as full success.",
+    "catalogSpeechNames": "Generic semantic spelling guidance passes Cat Woo, Boris Cherney, Claire Voe and rejects two unavailable shows. No guest-specific production aliases or threshold changes.",
+    "catalogTextFlow": "Four guests passed home invitation, selection, real media range, generated speech bytes, detail input state, pause, exact resume and return home. Earlier run FAILED on OpenAI speech timeout at Cat Wu resume. Player is simulated.",
+    "providerStability": "One live catalog run rejected an invalid provider distribution. Five- and twenty-round repeats passed. Not attributed to the phone failure without matching telemetry.",
+    "requestRecovery": "Red-to-green tests prove greeting, selection speech and detail request failures keep capture available, leave playback paused and accept a new wake. Fatal microphone failures still stop capture. UI distinguishes Ready to retry from a disconnected microphone.",
+    "catalogAudioFlow": "FAILED at Boris Cherny end-to-home: end this episode transcribed as And this episode and clarified. Cat Wu completed the full sequence; Boris passed selection, pause and exact resume. Quiet generated PCM, simulated player, not a phone test.",
+    "allCatalogSelection": "All 50 available catalog entries selected correctly by supplied title in a live Jev test; this is selection coverage, not playback or microphone coverage",
+    "nativeSpeechHandoff": "Phone log confirms confirmation bytes loaded but native playback never started before timeout. Shared speech now waits for native source readiness before play; cancellation tests pass. This is a candidate repair requiring device verification, not a confirmed root-cause fix. System media controls now register after actual podcast playback instead of during loading.",
+    "liveTextFlowCommand": "npm run eval:detail",
+    "liveSemanticCommand": "MURMUR_LIVE_SEMANTICS=1 node --env-file=.env.local --import tsx --test backend/intelligence.test.ts backend/catalog-interpreter.test.ts src/server/typesafe/client.test.ts"
+  },
+  "openGates": [
+    "User-reported home/detail voice failure is not device verified after these changes; diagnostics now distinguish speech request, native start, native completion and transcription failures without logging spoken words",
+    "Intermittent generated speech timeout and catalog response validation failure remain observed service failures; recovery is tested but service availability is not guaranteed",
+    "Mixed podcast and command audio failed to preserve the spoken command in transcription; matching isolated command audio transcribes correctly",
+    "Physical phone speaker wake recognition and audible confirmation/action ordering are unverified",
+    "Native background playback, Lock Screen controls, and reopen are unverified",
+    "Expo native remote-control pause has no command provenance in the current JS status API; simultaneous capture teardown and system pause remains a device race risk"
+  ],
+  "verificationLimits": [
+    "Pstack is an engineering workflow, not a bundled application test suite",
+    "Independent available-model design and code reviews were used; pstack's named model families and Cursor-only review tools were unavailable",
+    "Simulator tools were unavailable on this Mac",
+    "The live flow places a simulated player inside the reviewed ad; it does not verify spoken compound timestamps",
+    "One early live run failed with a generated-speech endpoint timeout; no timeout error was treated as a pass",
+    "An earlier full-flow pass failed on repetition at resume after background controls; the equivalent current/resume destination fix was followed by two full text-flow passes"
+  ],
+  "nativeCaptureFinding": "Installed Expo iOS AudioStream starts in measurement mode and does not enable AVAudioEngine voice processing. No echo-cancellation option is exposed in its stream options. This is a candidate cause of speaker interference, not a proven diagnosis of the user's phone.",
+  "nextDecision": "Native capture experiment is on hold while testing the user-approved pause-on-wake behavior in Expo Go. This JavaScript change does not require Xcode or a development build. Native microphone changes still would.",
+  "sources": [
+    "https://docs.expo.dev/workflow/customizing/",
+    "https://developer.apple.com/documentation/avfaudio/avaudioionode/setvoiceprocessingenabled(_:)",
+    "https://developers.openai.com/api/docs/guides/realtime-transcription"
+  ]
+}

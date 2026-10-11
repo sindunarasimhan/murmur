@@ -8,7 +8,7 @@ export default function HomeRoute() {
       <Head>
         <title>Murmur</title>
         <meta name="description" content="Murmur — a voice-first podcast experience." />
-        <meta name="theme-color" content="#08090B" />
+        <meta name="theme-color" content="#F6EFE3" />
       </Head>
       <LennyScreen />
     </>

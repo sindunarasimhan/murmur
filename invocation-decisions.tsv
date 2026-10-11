@@ -1,0 +1,6 @@
+ts	phase	decision	why	evidence	result
+2026-09-26	frame	Keep Expo and limit changes to invocation	User approved this scope and deferred playback redesign	INVOCATION_BUILD.md	defined
+2026-09-26	design	Retain the active voice controller as the sole audio owner	Both design passes found existing wake and discovery coordination	src/features/lenny/voice-controller.ts	chosen
+2026-09-26	implementation	Serialize native capture ownership	Independent review found stale startup could stop new recording	src/features/lenny/native-voice-capture.test.ts	regression passed
+2026-09-26	implementation	Keep mascot through first spoken selection	Episode metadata arrives before playback is ready	src/features/lenny/lenny-screen.tsx	fixed
+2026-09-26	verification	Separate live backend proof from phone acceptance	Synthetic audio and browser rendering do not prove physical capture	INVOCATION_BUILD.md	device gate open
