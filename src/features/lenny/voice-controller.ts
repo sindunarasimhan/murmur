@@ -196,7 +196,16 @@ export class LennyVoiceController {
     }
     if (!this.utterances.has(item)) this.recordUtterance(item,
       ['listening', 'followup', 'speaking'].includes(this.state.phase) ? { kind: 'pending', epoch: this.epoch, order: ++this.utteranceOrder } : { kind: 'ambient' });
-    const utterance = this.utterances.get(item);
+    let utterance = this.utterances.get(item);
+    if (utterance?.kind === 'pending' && this.state.phase === 'speaking' && !final) {
+      const epoch = this.next();
+      this.item = item;
+      this.recordUtterance(item, { kind: 'pending', epoch, order: utterance.order });
+      utterance = this.utterances.get(item);
+      this.update({ phase: 'listening', caption: 'I’m listening.', heard: displayedText.slice(-1000), speechPlaying: false, speechLevel: 0, error: undefined });
+      void this.ports.speech.stop();
+      this.armSilence(epoch);
+    }
     if (utterance?.kind === 'pending' && this.state.phase === 'speaking' && final) {
       this.recordUtterance(item, { ...utterance, finalText: text }); return;
     }

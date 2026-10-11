@@ -888,6 +888,29 @@ test('speech animation waits for real playback and clears when interrupted', asy
     finish(); await pending;
   } finally { await s.controller.dispose(); }
 });
+test('user speech cuts into an assistant answer and routes the next command before the answer finishes', async () => {
+  const s = setup(1000);
+  let releaseAnswer!: () => void;
+  let speechStops = 0;
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(42);
+    s.ports.speech.say = () => new Promise<void>((resolve) => { releaseAnswer = resolve; });
+    const answering = s.controller.submit('explain that'); await delay();
+    assert.equal(s.controller.state.phase, 'speaking');
+    s.ports.speech.stop = async () => { speechStops++; };
+    s.controller.partial('pause', 'cut-in'); await delay();
+    assert.equal(s.controller.state.phase, 'listening');
+    assert.equal(s.controller.state.heard, 'pause');
+    assert.equal(s.controller.state.speechPlaying, false);
+    assert(speechStops > 0);
+    s.ports.speech.say = async () => {};
+    s.controller.final('pause', 'cut-in'); await delay();
+    assert.equal(s.questions.at(-1), 'pause');
+    assert(!s.playing);
+    releaseAnswer(); await answering;
+    assert(!s.playing);
+  } finally { await s.controller.dispose(); }
+});
 test('wake interruption waits through silence and explicit return preserves the exact bookmark', async () => {
   const s = setup();
   try {

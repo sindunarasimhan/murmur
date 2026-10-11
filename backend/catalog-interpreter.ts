@@ -25,13 +25,17 @@ const clarify = (): CatalogIntent => ({ kind: 'clarify', candidateIds: [] });
 const STARTUP_ACTIONS = ['restart', 'enable-ad-skipping', 'skip-intro'] as const;
 type StartupAction = typeof STARTUP_ACTIONS[number];
 const isStartupAction = (value: string): value is StartupAction => STARTUP_ACTIONS.includes(value as StartupAction);
-const TOPIC_STOPWORDS = new Set(['a', 'an', 'and', 'any', 'about', 'can', 'could', 'episode', 'episodes', 'find', 'for', 'good', 'hear', 'interesting', 'interview', 'listen', 'me', 'on', 'play', 'please', 'podcast', 'podcasts', 'put', 'show', 'something', 'the', 'to', 'today', 'you']);
-const PLAYBACK_WORDS = new Set(['find', 'hear', 'listen', 'play', 'podcast', 'podcasts', 'put', 'show', 'start']);
-const TOPIC_MARKERS = new Set(['about', 'around', 'on', 'topic', 'topics', 'something']);
+const TOPIC_STOPWORDS = new Set<string>(['a', 'an', 'and', 'any', 'about', 'can', 'could', 'episode', 'episodes', 'find', 'for', 'good', 'hear', 'interesting', 'interview', 'listen', 'me', 'on', 'play', 'please', 'podcast', 'podcasts', 'put', 'show', 'something', 'the', 'to', 'today', 'you']);
+const PLAYBACK_WORDS = new Set<string>(['find', 'hear', 'listen', 'play', 'podcast', 'podcasts', 'put', 'show', 'start']);
+const TOPIC_MARKERS = new Set<string>(['about', 'around', 'on', 'topic', 'topics', 'something']);
 const TOPIC_CANDIDATE_LIMIT = 12;
 
-function tokens(text: string) {
+function tokens(text: string): string[] {
   return text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+}
+
+function presentText(value: string | null | undefined): value is string {
+  return typeof value === 'string' && value.length > 0;
 }
 
 function editDistanceAtMostOne(a: string, b: string) {
@@ -72,7 +76,7 @@ function topicEpisodeCandidates(context: CatalogContext) {
   const query = tokens(context.utterance).filter((token) => !TOPIC_STOPWORDS.has(token));
   if (!query.length) return [];
   const scored = context.episodes.map((episode, index) => {
-    const searchable = tokens([episode.title, episode.showTitle, episode.guest, episode.description].filter(Boolean).join(' '));
+    const searchable = tokens([episode.title, episode.showTitle, episode.guest, episode.description].filter(presentText).join(' '));
     const score = query.reduce((total, token) => total + (searchable.includes(token) ? 1 : 0), 0);
     return { episode, score, index };
   }).filter(({ score }) => score > 0)
@@ -86,7 +90,7 @@ function directEpisodeCandidates(context: CatalogContext) {
   const query = topicQueryTokens(context.utterance);
   if (!query.length) return [];
   return context.episodes.filter((episode) => {
-    const coreTokens = tokens([episode.title, episode.showTitle, episode.guest].filter(Boolean).join(' '));
+    const coreTokens = tokens([episode.title, episode.showTitle, episode.guest].filter(presentText).join(' '));
     return containsOrdered(coreTokens, query);
   });
 }
