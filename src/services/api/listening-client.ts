@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import { captionTrackSchema, catalogResolutionSchema, episodeSchema, sessionSchema, turnResultSchema, type ListeningSession, type Observation, type TurnRequest } from '../../../shared/listening';
-import { resolveApiBaseUrl, resolveExpoDevelopmentHostUri, type SynthesizedSpeech } from './murmur-api-client';
+import { resolveApiBaseUrl, resolveExpoDevelopmentHostUri, type ApiRuntime, type SynthesizedSpeech } from './murmur-api-client';
 import { withRequestDeadline } from './request-deadline';
 
 export class ListeningApiError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) { super(message); }
 }
-function runtime() {
+function runtime(): ApiRuntime {
   if (process.env.EXPO_OS === 'web' || typeof document !== 'undefined') return { platform: 'web' as const };
   // Keep native modules outside Node contract tests.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -15,20 +15,24 @@ function runtime() {
     development: typeof __DEV__ !== 'undefined' && __DEV__, expoHostUri: resolveExpoDevelopmentHostUri(constants) };
 }
 export function listeningBaseUrl() { return `${resolveApiBaseUrl(runtime())}/v2`; }
-export function voiceGatewayUrl() {
-  const configured = process.env.EXPO_PUBLIC_MURMUR_VOICE_URL;
+export function voiceGatewayUrlForRuntime(current: ApiRuntime, configured?: string) {
   if (configured) {
     const url = new URL(configured);
     if (!['wss:', 'ws:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Invalid voice gateway address');
     if (url.protocol === 'ws:' && typeof __DEV__ !== 'undefined' && !__DEV__) throw new Error('Voice requires a secure connection');
     return configured;
   }
-  const current = runtime();
   if (current.platform === 'web') return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.hostname}:4545/v2/voice`;
+  const url = new URL(resolveApiBaseUrl(current));
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = '/v2/voice';
+  if (current.configuredBaseUrl?.trim()) return url.toString();
   if (!current.development) throw new Error('Set the voice gateway address for this build.');
-  const url = new URL(listeningBaseUrl());
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'; url.port = '4545'; url.pathname = '/v2/voice';
+  url.port = '4545';
   return url.toString();
+}
+export function voiceGatewayUrl() {
+  return voiceGatewayUrlForRuntime(runtime(), process.env.EXPO_PUBLIC_MURMUR_VOICE_URL);
 }
 const TOKEN_KEY = 'murmur-listening-identity';
 let token: string | undefined;
