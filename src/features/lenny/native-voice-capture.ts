@@ -24,9 +24,9 @@ export class NativeVoiceCapture {
     return this.serialize(async () => {
       if (generation !== this.generation) return;
       this.started = true;
-      await this.ports.start();
-      if (generation !== this.generation) return;
       await this.ports.recordingMode();
+      if (generation !== this.generation) return;
+      await this.ports.start();
       if (generation !== this.generation) return;
       await this.ports.inputReady();
     });

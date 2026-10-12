@@ -45,9 +45,9 @@ test('a pending native start finishes cleanup before a newer recording can start
   const first = capture.start(); await flush();
   const cleanup = capture.stop();
   const second = capture.start(); await flush();
-  assert.deepEqual(calls, ['start']);
+  assert.deepEqual(calls, ['recording', 'start']);
   release(); await Promise.all([first, cleanup, second]);
-  assert.deepEqual(calls, ['start', 'stop', 'playback', 'start', 'recording']);
+  assert.deepEqual(calls, ['recording', 'start', 'stop', 'playback', 'recording', 'start']);
 });
 
 test('native failure does not poison future recording startup or skip restoring playback mode', async () => {
@@ -65,5 +65,5 @@ test('native failure does not poison future recording startup or skip restoring 
   broken = false;
   await capture.stop();
   await capture.start();
-  assert.deepEqual(calls, ['start', 'recording', 'stop', 'playback', 'stop', 'playback', 'start', 'recording']);
+  assert.deepEqual(calls, ['recording', 'start', 'stop', 'playback', 'stop', 'playback', 'recording', 'start']);
 });
