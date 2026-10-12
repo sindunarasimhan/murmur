@@ -492,6 +492,21 @@ test('wake phrase requires an explicit Hey Murmur and preserves the following re
   assert.equal(wakeRequest('Hey um Murmur, who is that?'), 'who is that?');
   assert.equal(wakeRequest('Hey mur mur, skip this ad'), 'skip this ad');
 });
+test('speech start gives a passive cue without accepting ambient home speech', async () => {
+  const s = setup(10); let resolves = 0;
+  s.ports.api.resolve = async () => { resolves++; return { kind: 'clarify', message: 'What would you like?' }; };
+  try {
+    await s.controller.activate(); await delay(20);
+    assert.equal(s.controller.state.phase, 'idle');
+    s.controller.inputSpeechStarted();
+    assert.equal(s.controller.state.inputActive, true);
+    assert.equal(s.controller.state.phase, 'idle');
+    s.controller.final('background conversation', 'ambient'); await delay();
+    assert.equal(resolves, 0);
+    s.controller.inputSpeechStopped();
+    assert.equal(s.controller.state.inputActive, false);
+  } finally { await s.controller.dispose(); }
+});
 test('bare home wake speaks generated invitation once, then accepts an unprefixed delayed episode choice', async () => {
   const s = setup(10);
   let invitations = 0;
@@ -938,6 +953,27 @@ test('user speech cuts into an assistant answer and routes the next command befo
     assert(!s.playing);
     releaseAnswer(); await answering;
     assert(!s.playing);
+  } finally { await s.controller.dispose(); }
+});
+test('speech-start event cuts into a detail answer before transcript text arrives', async () => {
+  const s = setup(1000);
+  let releaseAnswer!: () => void;
+  let speechStops = 0;
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(42);
+    s.ports.speech.say = () => new Promise<void>((resolve) => { releaseAnswer = resolve; });
+    const answering = s.controller.submit('explain that'); await delay();
+    assert.equal(s.controller.state.phase, 'speaking');
+    s.ports.speech.stop = async () => { speechStops++; };
+    s.controller.inputSpeechStarted(); await delay();
+    assert.equal(s.controller.state.phase, 'listening');
+    assert.equal(s.controller.state.inputActive, true);
+    assert(speechStops > 0);
+    s.ports.speech.say = async () => {};
+    s.controller.final('pause', 'cut-in-after-speech-start'); await delay();
+    assert.equal(s.questions.at(-1), 'pause');
+    assert(!s.playing);
+    releaseAnswer(); await answering;
   } finally { await s.controller.dispose(); }
 });
 test('final-only user speech cuts into an assistant answer without waiting for the answer to finish', async () => {

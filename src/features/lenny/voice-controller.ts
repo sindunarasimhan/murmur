@@ -5,7 +5,7 @@ export type VoicePhase = 'idle' | 'connecting' | 'listening' | 'thinking' | 'spe
 type Engagement = 'wake-required' | 'catalog-dialogue' | 'episode-dialogue';
 type Utterance = { kind: 'pending'; epoch: number; order: number; finalText?: string } | { kind: 'ambient' } | { kind: 'consumed' };
 type DetailInteraction = { kind: 'monitoring' } | { kind: 'collecting' | 'resolving' | 'confirming' | 'executing' | 'exploring'; origin: number; wasPlaying: boolean; restoreOnDismiss: boolean; tap?: boolean };
-export type VoiceState = { phase: VoicePhase; microphone: boolean; speechPlaying?: boolean; speechLevel?: number; episode?: PreparedEpisode; caption: string; heard: string; error?: string };
+export type VoiceState = { phase: VoicePhase; microphone: boolean; inputActive?: boolean; speechPlaying?: boolean; speechLevel?: number; episode?: PreparedEpisode; caption: string; heard: string; error?: string };
 export type ListeningPorts = {
   uuid(): string;
   audio: { position(): number; playing(): boolean; setDucked(ducked: boolean): void; load(episode: PreparedEpisode, position: number, signal: AbortSignal): Promise<void>; play(): void; pause(): void; seek(seconds: number): Promise<number>; clear(): void };
@@ -82,7 +82,7 @@ export class LennyVoiceController {
   private current(epoch: number) { return !this.disposed && epoch === this.epoch; }
   private next() {
     this.inviting = false;
-    this.update({ speechPlaying: false, speechLevel: 0 });
+    this.update({ inputActive: false, speechPlaying: false, speechLevel: 0 });
     this.abort.abort(); this.abort = new AbortController(); clearTimeout(this.timer); clearTimeout(this.speakingDeadline);
     this.speakingDeadline = undefined;
     this.awaitingFinal = false; return ++this.epoch;
@@ -327,14 +327,26 @@ export class LennyVoiceController {
     if (this.state.speechPlaying) this.update({ speechLevel: level });
   }
   inputSpeechStarted() {
-    if (!this.state.episode || this.detail.kind !== 'monitoring' || !this.ports.audio.playing()) return;
-    this.ports.audio.setDucked(true);
-    this.update({ caption: 'Listening for “Hey Murmur”…' });
+    if (!this.state.microphone || this.disposed) return;
+    if (this.state.episode && this.state.phase === 'speaking' && this.engagement === 'episode-dialogue') {
+      const epoch = this.next();
+      this.beginDetail('collecting');
+      this.update({ inputActive: true, phase: 'listening', caption: 'I’m listening.', speechPlaying: false, speechLevel: 0, error: undefined });
+      void this.ports.speech.stop();
+      this.armSilence(epoch);
+      return;
+    }
+    if (this.state.episode && this.detail.kind === 'monitoring' && this.ports.audio.playing()) {
+      this.ports.audio.setDucked(true);
+      this.update({ inputActive: true, caption: 'Listening for “Hey Murmur”…' });
+      return;
+    }
+    this.update({ inputActive: true });
   }
   inputSpeechStopped() {
-    if (!this.state.episode || this.detail.kind !== 'monitoring') return;
+    if (!this.state.episode || this.detail.kind !== 'monitoring') { this.update({ inputActive: false }); return; }
     this.ports.audio.setDucked(false);
-    this.update({ caption: 'Say “Hey Murmur” whenever you need me.' });
+    this.update({ inputActive: false, caption: 'Say “Hey Murmur” whenever you need me.' });
   }
   private async say(text: string, epoch: number, turn?: TurnResult) {
     if (!this.current(epoch)) return;

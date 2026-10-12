@@ -22,6 +22,7 @@ test('detail separates voice readiness from playback state', () => {
   assert.deepEqual(detailPresentation(state), { voiceStatus: 'Ready', playbackStatus: 'Playing', heard: state.heard, reply: '', error: false });
   assert.equal(detailPresentation({ ...state, phase: 'paused' }).playbackStatus, 'Paused');
   assert.equal(detailPresentation({ ...state, phase: 'thinking' }).playbackStatus, undefined);
+  assert.equal(detailPresentation({ ...state, inputActive: true }).voiceStatus, 'Listening');
 });
 
 test('detail prioritizes connection errors and microphone availability over playback', () => {

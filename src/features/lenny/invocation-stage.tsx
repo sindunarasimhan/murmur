@@ -23,7 +23,7 @@ export function InvocationStage({ state, playbackEntered = false, seconds = 0, c
   const insets = useSafeAreaInsets();
   const { width, height, fontScale } = useWindowDimensions();
   const reducedMotion = useReducedMotion();
-  const listening = state.microphone && (state.phase === 'listening' || state.phase === 'followup');
+  const listening = state.microphone && (state.inputActive || state.phase === 'listening' || state.phase === 'followup');
   const playback = Boolean(state.episode && playbackEntered);
   const detail = detailPresentation(state);
   const transition = useSharedValue(playback ? 1 : 0);
