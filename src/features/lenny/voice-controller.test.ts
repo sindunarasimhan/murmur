@@ -911,6 +911,25 @@ test('user speech cuts into an assistant answer and routes the next command befo
     assert(!s.playing);
   } finally { await s.controller.dispose(); }
 });
+test('final-only user speech cuts into an assistant answer without waiting for the answer to finish', async () => {
+  const s = setup(1000);
+  const releases: Array<() => void> = [];
+  let speechStops = 0;
+  try {
+    await s.controller.activate(); await s.controller.submit('play Lenny'); s.seek(42);
+    s.ports.speech.say = () => new Promise<void>((resolve) => { releases.push(resolve); });
+    const answering = s.controller.submit('explain that'); await delay();
+    assert.equal(s.controller.state.phase, 'speaking');
+    s.ports.speech.stop = async () => { speechStops++; };
+    s.controller.final('pause', 'cut-in-final'); await delay();
+    assert.equal(s.controller.state.heard, 'pause');
+    assert(speechStops > 0);
+    assert.equal(s.questions.at(-1), 'pause');
+    for (const release of releases.splice(0)) release();
+    await answering;
+    assert(!s.playing);
+  } finally { await s.controller.dispose(); }
+});
 test('wake interruption waits through silence and explicit return preserves the exact bookmark', async () => {
   const s = setup();
   try {
