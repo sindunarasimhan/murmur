@@ -488,6 +488,8 @@ test('native completion after its paused notification still offers the next epis
 test('wake phrase requires an explicit Hey Murmur and preserves the following request', () => {
   assert.equal(wakeRequest('People sometimes murmur about pricing.'), undefined);
   assert.equal(wakeRequest('podcast background. Hey, Murmur! What did she mean?'), 'What did she mean?');
+  assert.equal(wakeRequest('Hey, yes, Murmur, play the Cat Wu episode'), 'play the Cat Wu episode');
+  assert.equal(wakeRequest('Hey um Murmur, who is that?'), 'who is that?');
   assert.equal(wakeRequest('Hey mur mur, skip this ad'), 'skip this ad');
 });
 test('bare home wake speaks generated invitation once, then accepts an unprefixed delayed episode choice', async () => {

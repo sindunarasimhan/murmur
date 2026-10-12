@@ -24,7 +24,7 @@ export type ListeningPorts = {
   followupMs?: number;
 };
 
-const WAKE = /\bhey[\s,]+(?:murmur|murmer|mur mur)\b[\s,.:!?-]*/i;
+const WAKE = /\bhey(?:[\s,]+(?:um|uh|yes))?[\s,]+(?:murmur|murmer|mur mur)\b[\s,.:!?-]*/i;
 export function wakeRequest(text: string): string | undefined {
   const match = WAKE.exec(text);
   return match ? text.slice(match.index + match[0].length).trim() : undefined;
