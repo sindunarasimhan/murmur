@@ -15,3 +15,9 @@
 - Add targeted regression tests and rerun the working home-to-playback, voice, pause/resume, seeking, and background flows relevant to the change. Distinguish mocks, generated audio, simulator execution, and physical-device verification.
 - Report precisely what changed and what was verified. Passing component tests does not establish end-to-end device success. Do not call an unverified experience complete.
 - Backlog entries remain deferred until the user explicitly authorizes work on them. When asked to stop or discuss first, stop implementation and delegated edits immediately.
+
+## Product-quality AI behavior
+
+- Treat Murmur as a real product, not a phrase-matched prototype. Do not fix voice or intent failures by hardcoding one observed utterance, person, episode, or demo wording.
+- For conversation and exploration flows, carry structured state such as the active episode, latest Q&A history, bookmark, and retrieved evidence. Intent routing should use that context generically instead of matching one example phrase.
+- Regression tests may include concrete examples from a bug report, but the implementation and prompts must describe the general behavior being protected.

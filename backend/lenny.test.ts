@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ContinuousVoiceBudget } from './continuous-voice';
 import { parseLennyTranscript, publisherAdBreaks, reviewedAdBreaks } from './lenny-catalog';
-import { exactCommand } from './intelligence';
+import { timeCandidates } from './time-seek';
 
 test('transcript import preserves overlapping speakers, rejects missing timing and mismatched durations', () => {
   const text = '**Host** (00:00:10):\nA question.\n\n**Guest** (00:00:09):\nOverlapping speech.\n\n**Host** (00:00:10):\nClarification.';
@@ -18,18 +18,15 @@ test('advertising discussion is not an ad; changed transcripts cannot reuse revi
   assert.deepEqual(publisherAdBreaks([{ startSeconds: 0, title: 'Sponsor' }, { startSeconds: 40, title: 'Interview' }], 90).map((ad) => ad.endSeconds), [40]);
   assert.deepEqual(reviewedAdBreaks('lenny-brian-halligan', 'changed-transcript', []), []);
 });
-test('spoken time skips accept longer durations and questions are not playback commands', () => {
-  assert.equal(exactCommand('Go forward thirty seconds.')?.delta, 30);
-  assert.equal(exactCommand('go back two minutes')?.delta, -120);
-  assert.equal(exactCommand('skip ahead twenty-five seconds')?.delta, 25);
-  assert.equal(exactCommand('go forward eleven minutes')?.delta, 660);
-  assert.equal(exactCommand('Why did he go back thirty seconds?'), undefined);
-  assert.equal(exactCommand('Go to thirty-seven minutes.')?.position, 2220);
-  assert.equal(exactCommand('go to 37:10')?.position, 2230);
-  assert.equal(exactCommand('go to 37:90'), undefined);
-  assert.equal(exactCommand('Start over')?.position, 0);
-  assert.equal(exactCommand('skip the sponsor please')?.kind, 'skip-ad');
-  assert.equal(exactCommand('Can you explain why we skip the sponsor?'), undefined);
+test('spoken time amounts are extracted without deciding playback intent locally', () => {
+  assert.equal(timeCandidates('Go forward thirty seconds.')[0]?.seconds, 30);
+  assert.equal(timeCandidates('go back two minutes')[0]?.seconds, 120);
+  assert.equal(timeCandidates('skip ahead twenty-five seconds')[0]?.seconds, 25);
+  assert.equal(timeCandidates('go forward eleven minutes')[0]?.seconds, 660);
+  assert.equal(timeCandidates('Why did he go back thirty seconds?')[0]?.seconds, 30);
+  assert.equal(timeCandidates('Go to thirty-seven minutes.')[0]?.seconds, 2220);
+  assert.equal(timeCandidates('go to 37:10')[0]?.seconds, 2230);
+  assert.equal(timeCandidates('go to 37:90').length, 0);
 });
 test('continuous voice permits repeated bounded PCM turns but no provider controls or audio floods', () => {
   const budget = new ContinuousVoiceBudget(0);

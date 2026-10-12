@@ -54,12 +54,14 @@ export class Repository {
     return result.rows[0];
   }
   async catalog(): Promise<PreparedEpisode[]> {
-    const ids = await this.pool.query(`SELECT id FROM episodes WHERE collection='lenny-free' AND status='ready' AND ($1::text IS NULL OR id=$1) ORDER BY published_at DESC,id`, [this.limits.focusEpisodeId ?? null]);
+    const ids = await this.pool.query(`SELECT id FROM episodes
+      WHERE status='ready' AND ($1::text IS NULL OR id=$1)
+      ORDER BY published_at DESC NULLS LAST,id`, [this.limits.focusEpisodeId ?? null]);
     return Promise.all(ids.rows.map((row) => this.episode(row.id)));
   }
   async unfinished(owner: string): Promise<PreparedEpisode | undefined> {
     const rows = await this.pool.query(`SELECT e.id FROM listening_sessions s JOIN episodes e ON e.id=s.episode_id
-      WHERE s.owner_id=$1 AND e.collection='lenny-free' AND e.status='ready' AND s.position_seconds>0 AND s.position_seconds<e.duration_seconds-20
+      WHERE s.owner_id=$1 AND e.status='ready' AND s.position_seconds>0 AND s.position_seconds<e.duration_seconds-20
       AND ($2::text IS NULL OR e.id=$2) ORDER BY s.updated_at DESC LIMIT 1`, [owner, this.limits.focusEpisodeId ?? null]);
     return rows.rows[0] ? this.episode(rows.rows[0].id) : undefined;
   }

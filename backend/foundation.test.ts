@@ -9,7 +9,7 @@ import { backendConfig } from './config';
 import { createDatabase, migrate } from './database';
 import { ObjectStore } from './storage';
 import { enqueuePreparedEpisode, prepareEpisode, PREPARE_QUEUE, startQueue } from './preparation';
-import { exactCommand, type Intelligence } from './intelligence';
+import type { Intelligence } from './intelligence';
 import { Repository } from './repository';
 import { VoiceInputBudget, MAX_VOICE_BYTES } from './voice-budget';
 import { ContinuousVoiceGateway } from './continuous-voice';
@@ -49,10 +49,20 @@ test('PostgreSQL, preparation jobs, and authenticated listening work together', 
     async decide(input) {
       decisions += 1;
       await decisionBarrier?.();
-      return exactCommand(input.utterance) ?? { kind: input.utterance === 'unclear request' ? 'unclear' : input.utterance === 'jump to the discussion about teams' ? 'topic' : 'deeper', source: 'jev', passageId: input.evidence[0]?.id };
+      if (input.utterance === 'what is the guest’s current title?') return { kind: 'deeper', source: 'jev' };
+      if (input.utterance === 'back to the podcast') return { kind: 'return', source: 'jev' };
+      if (input.utterance === 'pause') return { kind: 'pause', source: 'jev' };
+      if (input.utterance === 'play') return { kind: 'play', source: 'jev' };
+      if (['skip this ad', 'skip ad', 'skip the ad'].includes(input.utterance)) return { kind: 'skip-ad', source: 'jev' };
+      if (input.utterance === 'go to ten seconds') return { kind: 'seek', position: 10, source: 'jev' };
+      return { kind: input.utterance === 'unclear request' ? 'unclear' : input.utterance === 'jump to the discussion about teams' ? 'topic' : 'deeper', source: 'jev', passageId: input.evidence[0]?.id };
     },
     async answer(input) {
       answers += 1;
+      if (input.utterance === 'what is the guest’s current title?') {
+        assert.equal(input.evidence.length, 0);
+        return 'I can check current context for that title without treating the transcript as the only source.';
+      }
       assert(input.evidence.length > 0);
       assert(input.evidence.every((item) => !item.text.includes('injected client transcript')));
       return `The episode describes ${input.evidence[0]!.text}`;
@@ -176,6 +186,16 @@ test('PostgreSQL, preparation jobs, and authenticated listening work together', 
       assert.equal((await app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/acknowledgements`, headers: headers(user.token), payload: ack })).statusCode, 409);
       assert.equal((await app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/turns`, headers: headers(user.token), payload: returnInput })).statusCode, 409);
     });
+    await t.test('general exploration can answer when no transcript passage is selected', async () => {
+      const user = await guest(); let session = await open(user.token);
+      session = await repository.observe(user.id, session.id, { ...session, reason: 'interrupt', positionSeconds: 18.375 });
+      const response = await app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/turns`, headers: headers(user.token), payload: turnInput(session, 'what is the guest’s current title?') });
+      assert.equal(response.statusCode, 200, response.body);
+      const result = response.json();
+      assert.equal(result.action, null);
+      assert.equal(result.evidence.length, 0);
+      assert.match(result.answer, /current context/);
+    });
     await t.test('pause acknowledgement records the actual stop after spoken confirmation without relaxing seek precision', async () => {
       const user = await guest(); let session = await open(user.token);
       session = await repository.observe(user.id, session.id, { ...session, reason: 'interrupt', positionSeconds: 18 });
@@ -286,8 +306,12 @@ test('PostgreSQL, preparation jobs, and authenticated listening work together', 
         VALUES('lenny-test',$1,'teams',40,90,'Teams need a shared objective before choosing tools.')`, [version]);
       for (let i = 0; i < 10; i++) await pool.query(`INSERT INTO transcript_segments(episode_id,audio_version,id,start_seconds,end_seconds,text)
         VALUES('lenny-test',$1,$2,$3,$4,'An unrelated opening anecdote.')`, [version, `intro${i}`, i * 2, i * 2 + 2]);
+      await pool.query(`INSERT INTO episodes(id,title,show_title,description,audio_version,duration_seconds,status,collection,guest,published_at,audio_key)
+        VALUES('all-in-test','Test markets roundtable','All-In Podcast','A roundtable about markets',$1,300,'ready','all-in-free','All-In Hosts','2025-01-01',$2)`,
+        [version, audioKey]);
       const catalog = await app.inject({ url: '/v2/catalog' });
-      assert.equal(catalog.json().length, 1);
+      assert.equal(catalog.json().length, 3);
+      assert.deepEqual(catalog.json().map((episode: { id: string }) => episode.id), ['lenny-test', 'all-in-test', 'small-places']);
       assert.equal(catalog.json()[0].audioPath, `/media/${audioKey}`);
       const range = await app.inject({ url: `/v2/media/${audioKey}`, headers: { range: 'bytes=3-11' } });
       assert.equal(range.statusCode, 206); assert.equal(range.headers['content-type'], 'audio/mpeg');
@@ -297,7 +321,7 @@ test('PostgreSQL, preparation jobs, and authenticated listening work together', 
       const focused = await createApp({ config: { ...config, focusEpisodeId: 'lenny-test' }, pool, objects, intelligence });
       try {
         assert.equal((await focused.app.inject({ url: '/v2/catalog' })).json()[0].id, 'lenny-test');
-        assert.equal((await focused.app.inject({ method: 'POST', url: '/v2/sessions', headers: headers(user.token), payload: { episodeId: 'small-places' } })).statusCode, 409);
+        assert.equal((await focused.app.inject({ method: 'POST', url: '/v2/sessions', headers: headers(user.token), payload: { episodeId: 'all-in-test' } })).statusCode, 409);
       } finally { await focused.app.close(); }
       assert.equal(JSON.stringify(catalog.json()).includes('Teams need'), false);
       const resolve = await app.inject({ method: 'POST', url: '/v2/catalog/resolve', headers: headers(user.token), payload: { utterance: 'play Lenny' } });

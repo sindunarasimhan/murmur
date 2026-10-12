@@ -133,12 +133,23 @@ test('resume uses only saved episodes still available in the catalog and does no
   assert.equal(unknown.kind, 'clarify'); assert.equal(unknown.episode, undefined);
 });
 
-test('exact current-player controls do not depend on Jev or consume its allowance', async () => {
-  const unavailable = async (): Promise<never> => { throw new Error('Provider must not run'); };
-  const catalog = new CatalogService({ catalog: async () => [design], unfinished: unavailable, charge: unavailable }, unavailable);
+test('current-player controls route through the catalog interpreter, not phrase shortcuts', async () => {
+  let calls = 0;
+  let charges = 0;
+  const catalog = new CatalogService({
+    catalog: async () => [design],
+    unfinished: async () => undefined,
+    charge: async () => { charges += 1; },
+  }, async ({ currentEpisodeId }) => {
+    calls += 1;
+    assert.equal(currentEpisodeId, design.id);
+    return { kind: 'current' };
+  });
   for (const utterance of ['pause', 'go to 37 minutes', 'skip this ad']) {
     assert.equal((await catalog.resolve('owner', utterance, design.id, [], signal())).kind, 'current');
   }
+  assert.equal(calls, 3);
+  assert.equal(charges, 3);
 });
 
 test('failed or cancelled interpretation cannot fall back to the only available episode', async () => {

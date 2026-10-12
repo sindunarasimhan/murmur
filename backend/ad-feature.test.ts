@@ -5,7 +5,7 @@ import { backendConfig } from './config';
 import { createDatabase, migrate } from './database';
 import { Repository } from './repository';
 import { ListeningService } from './listening-service';
-import { exactCommand, type Intelligence } from './intelligence';
+import type { Intelligence } from './intelligence';
 import { actionSchema } from '../shared/listening';
 import { prepareStoredAdPlan } from './ad-preparation-store';
 
@@ -43,7 +43,9 @@ test('episode ad metadata drives shared one-off and auto skipping without changi
     const intelligence: Intelligence = {
       decide: async ({ utterance }) => utterance === 'enable' ? { kind: 'set-ad-skipping', enabled: true, source: 'jev' }
         : utterance === 'disable' ? { kind: 'set-ad-skipping', enabled: false, source: 'jev' }
-          : exactCommand(utterance) ?? { kind: 'unclear', source: 'jev' },
+          : utterance === 'go to five minutes' ? { kind: 'seek', position: 300, source: 'jev' }
+            : utterance === 'skip ad' ? { kind: 'skip-ad', source: 'jev' }
+              : { kind: 'unclear', source: 'jev' },
       answer: async () => 'Answer',
     };
     const service = new ListeningService(repo, intelligence);

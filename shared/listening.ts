@@ -67,5 +67,6 @@ export type CaptionTrack = z.infer<typeof captionTrackSchema>;
 export const catalogResolutionSchema = z.object({
   kind: z.enum(['play', 'current', 'clarify', 'stop', 'home', 'cancel']),
   episode: episodeSchema.optional(), message: z.string(),
+  initialAction: z.enum(['restart', 'enable-ad-skipping', 'skip-intro']).optional(),
 });
 export type CatalogResolution = z.infer<typeof catalogResolutionSchema>;

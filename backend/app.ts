@@ -25,6 +25,7 @@ function bearer(request: FastifyRequest) {
   return request.headers.cookie?.split(';').map((value) => value.trim()).find((value) => value.startsWith('murmur_identity='))?.slice('murmur_identity='.length);
 }
 const sessionId = (request: FastifyRequest) => z.uuid().parse((request.params as { id: string }).id);
+const episodeIdSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,127}$/);
 export async function createApp(options: { config: BackendConfig; pool: Pool; objects: ObjectStore; intelligence?: Intelligence; catalogInterpreter?: CatalogInterpreter; invitation?: CatalogInvitation; speech?: typeof synthesizeAudio }) {
   const { config, pool, objects } = options;
   const repository = new Repository(pool, config);
@@ -74,14 +75,14 @@ export async function createApp(options: { config: BackendConfig; pool: Pool; ob
   app.get('/v2/catalog', () => repository.catalog());
   app.get('/v2/catalog/:episodeId/captions', async (request) => {
     await owner(request);
-    const id = z.string().regex(/^(small-places|lenny-[a-z0-9_-]+)$/).parse((request.params as { episodeId: string }).episodeId);
+    const id = episodeIdSchema.parse((request.params as { episodeId: string }).episodeId);
     const { audioVersion } = z.object({ audioVersion: z.string().regex(/^[a-f0-9]{64}$/) }).parse(request.query);
     const episode = await repository.episode(id);
     if (episode.audioVersion !== audioVersion) throw new ServiceError(409, 'audio_changed', 'The recording changed. Reopen the episode to load matching captions.');
     const result = await pool.query('SELECT start_seconds AS "startSeconds",end_seconds AS "endSeconds",text FROM transcript_segments WHERE episode_id=$1 AND audio_version=$2 ORDER BY start_seconds,id', [id, audioVersion]);
     return { audioVersion, cues: result.rows };
   });
-  app.get('/v2/catalog/:episodeId', (request) => repository.episode(z.string().regex(/^lenny-[a-z0-9_-]+$/).parse((request.params as { episodeId: string }).episodeId)));
+  app.get('/v2/catalog/:episodeId', (request) => repository.episode(episodeIdSchema.parse((request.params as { episodeId: string }).episodeId)));
   app.post('/v2/catalog/resolve', async (request, reply) => {
     const input = z.object({ utterance: z.string().trim().min(1).max(1000), currentEpisodeId: z.string().optional(), history: z.array(z.string().max(2000)).max(4).default([]) }).strict().parse(request.body);
     const controller = new AbortController();
@@ -117,7 +118,7 @@ export async function createApp(options: { config: BackendConfig; pool: Pool; ob
   });
   app.delete('/v2/live-voice', async (request) => { continuousVoice.cancel(await owner(request)); return { stopped: true }; });
   app.post('/v2/sessions', async (request) => {
-    const input = z.object({ episodeId: z.string().regex(/^(small-places|lenny-[a-z0-9_-]+)$/) }).strict().parse(request.body);
+    const input = z.object({ episodeId: episodeIdSchema }).strict().parse(request.body);
     if (config.focusEpisodeId && input.episodeId !== config.focusEpisodeId) throw new ServiceError(409, 'focus_episode', 'That episode is not available in the current catalog.');
     return repository.openSession(await owner(request), input.episodeId);
   });

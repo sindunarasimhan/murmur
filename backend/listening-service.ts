@@ -66,10 +66,10 @@ export class ListeningService {
         else if (decision.kind === 'skip-ad') answer = adResult?.kind === 'outside-ad' ? 'There isn’t an ad to skip at this point.' : 'I can’t verify an ad ending here. You can tell me how many seconds to skip.';
         else if (decision.kind === 'skip-intro') answer = introResult?.kind === 'past-intro' ? 'We’re already past the intro.' : 'I don’t have a verified intro ending for this recording, so I won’t guess where to jump.';
         else if (decision.kind === 'unclear') answer = 'Would you like an explanation, or a playback action?';
-        else if (!evidence.length) answer = 'I do not have a matching passage for that question. Try asking about the part we just heard.';
+        else if (!evidence.length && !['explain', 'deeper'].includes(decision.kind)) answer = 'I do not have a matching passage for that question. Try asking about the part we just heard.';
         else {
           // Include nearby retrieved passages to preserve qualifying context.
-          evidence = [evidence[0]!, ...candidates.filter((item) => item.id !== decision.passageId).slice(0, 2)];
+          if (evidence.length) evidence = [evidence[0]!, ...candidates.filter((item) => item.id !== decision.passageId).slice(0, 2)];
           answer = await this.intelligence.answer({ utterance: input.utterance, decision, episode, session, evidence, history }, controller.signal);
         }
       }

@@ -33,18 +33,22 @@ test('a confident skip action still needs an explicit, confident advertising tar
     assert.equal(result.kind, probability >= 0.85 ? 'skip-ad' : 'unclear');
   }
 });
-test('exact playback commands remain available without an AI decision', async () => {
-  const choices: typeof askChoices = async () => { throw new Error('The provider must not run'); };
-  const decision = await createIntelligence(backendConfig(), choices).decide({ utterance: 'go to thirty-seven minutes', session, evidence: [], history: [] }, new AbortController().signal);
-  assert.equal(decision.position, 2220); assert.equal(decision.source, 'code');
+test('playback commands require the semantic intent layer instead of phrase shortcuts', async () => {
+  const choices: typeof askChoices = async () => { throw new Error('The provider must not run without configuration'); };
+  await assert.rejects(
+    createIntelligence(backendConfig(), choices).decide({ utterance: 'go to thirty-seven minutes', session, evidence: [], history: [] }, new AbortController().signal),
+    { code: 'decision_unavailable' },
+  );
 });
 test('continue inside a conversation reaches semantic interpretation instead of unconditional playback', async () => {
   const config = backendConfig(); config.providers.typesafe.apiKey = 'test-only';
   let calls = 0;
-  const choices: typeof askChoices = async <K extends string>(_state: unknown, questions: Record<K, ChoiceQuestion>) => {
+  const choices: typeof askChoices = async <K extends string>(state: unknown, questions: Record<K, ChoiceQuestion>) => {
     calls++;
     return Object.fromEntries(Object.entries<ChoiceQuestion>(questions).map(([key, question]) => {
-      const selected = key === 'action' ? 'unclear' : key === 'passage' ? 'none' : 'unspecified';
+      const selected = key === 'action'
+        ? (state as { utterance: string }).utterance.includes('podcast') ? 'play' : 'unclear'
+        : key === 'passage' ? 'none' : 'unspecified';
       return [key, { choice: selected, confidence: 1, probabilities: Object.fromEntries(Object.keys(question.criteria).map((option) => [option, option === selected ? 1 : 0])) } satisfies ChoiceAnswer];
     })) as Record<K, ChoiceAnswer>;
   };
@@ -53,7 +57,7 @@ test('continue inside a conversation reaches semantic interpretation instead of 
   assert.equal((await intelligence.decide({ utterance: 'Continue.', session, evidence: [], history }, new AbortController().signal)).kind, 'unclear');
   assert.equal(calls, 1);
   assert.equal((await intelligence.decide({ utterance: 'Continue the podcast', session, evidence: [], history }, new AbortController().signal)).kind, 'play');
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 });
 
 test('semantic playback has one resume outcome rather than competing play and return labels', async () => {
@@ -74,7 +78,7 @@ test('semantic playback has one resume outcome rather than competing play and re
 test('semantic closure returns to the bookmarked podcast while follow-up questions continue exploring', async () => {
   const config = backendConfig(); config.providers.typesafe.apiKey = 'test-only';
   for (const [utterance, selected, expected] of [
-    ['Okay, got it', 'return', 'return'],
+    ['Okay, I am done with this side discussion', 'return', 'return'],
     ['Got it, but why?', 'deeper', 'deeper'],
   ] as const) {
     const choices: typeof askChoices = async <K extends string>(_state: unknown, questions: Record<K, ChoiceQuestion>) => Object.fromEntries(Object.entries<ChoiceQuestion>(questions).map(([key, question]) => {
@@ -94,6 +98,52 @@ test('semantic closure returns to the bookmarked podcast while follow-up questio
   }
 });
 
+test('exploration does not close on lightweight acknowledgement when history can support more depth', async () => {
+  const config = backendConfig(); config.providers.typesafe.apiKey = 'test-only';
+  const choices: typeof askChoices = async <K extends string>(_state: unknown, questions: Record<K, ChoiceQuestion>) => {
+    assert.match(questions['action' as K].instructions, /keep the side discussion open by default/i);
+    assert.match(questions['action' as K].criteria.return!, /not a lightweight acknowledgement/i);
+    return Object.fromEntries(Object.entries<ChoiceQuestion>(questions).map(([key, question]) => {
+      const selected = key === 'action' ? 'deeper' : key === 'passage' ? 'p1' : 'unspecified';
+      return [key, { choice: selected, confidence: 1, probabilities: Object.fromEntries(Object.keys(question.criteria).map((option) => [option, option === selected ? 1 : 0])) } satisfies ChoiceAnswer];
+    })) as Record<K, ChoiceAnswer>;
+  };
+  const decision = await createIntelligence(config, choices).decide({
+    utterance: 'Okay, but why?',
+    session,
+    evidence: [{ id: 'p1', startSeconds: 10, endSeconds: 20, text: 'Product taste improves through repeated judgment and feedback.' }],
+    history: [{ question: 'What is product taste?', answer: 'Product taste is judgment about what is worth building and why.' }],
+  }, new AbortController().signal);
+  assert.equal(decision.kind, 'deeper');
+});
+
+test('follow-up exploration carries conversation context without phrase-specific routing', async () => {
+  const config = backendConfig(); config.providers.typesafe.apiKey = 'test-only';
+  let observed: unknown;
+  const choices: typeof askChoices = async <K extends string>(state: unknown, questions: Record<K, ChoiceQuestion>) => {
+    observed = state;
+    assert.match(questions['action' as K].instructions, /latest established discussion topic/i);
+    assert.match(questions['action' as K].criteria.deeper!, /latest history supplies the topic/i);
+    assert.doesNotMatch(questions['action' as K].instructions, /how do you develop that/i);
+    assert.doesNotMatch(questions['action' as K].criteria.deeper!, /how to develop that/i);
+    return Object.fromEntries(Object.entries<ChoiceQuestion>(questions).map(([key, question]) => {
+      const selected = key === 'action' ? 'deeper' : key === 'passage' ? 'p1' : 'unspecified';
+      return [key, { choice: selected, confidence: 1, probabilities: Object.fromEntries(Object.keys(question.criteria).map((option) => [option, option === selected ? 1 : 0])) } satisfies ChoiceAnswer];
+    })) as Record<K, ChoiceAnswer>;
+  };
+  for (const utterance of ['How would someone improve it?', 'Can you give me an example?', 'Why does that matter?']) {
+    const decision = await createIntelligence(config, choices).decide({
+      utterance,
+      session,
+      evidence: [{ id: 'p1', startSeconds: 10, endSeconds: 20, text: 'Product taste is the judgment for what to build and how it should feel.' }],
+      history: [{ question: 'What is product taste?', answer: 'Product taste is judgment about what is worth building and why.' }],
+    }, new AbortController().signal);
+    assert.equal(decision.kind, 'deeper', utterance);
+    assert.equal(decision.passageId, 'p1', utterance);
+    assert.deepEqual((observed as { history: unknown[] }).history, [{ question: 'What is product taste?', answer: 'Product taste is judgment about what is worth building and why.' }]);
+  }
+});
+
 test('live semantic commands resolve against the prepared podcast and conversation context', { skip: process.env.MURMUR_LIVE_SEMANTICS !== '1' }, async () => {
   const { Pool } = await import('pg');
   const { Repository } = await import('./repository');
@@ -109,7 +159,7 @@ test('live semantic commands resolve against the prepared podcast and conversati
       { utterance: 'Pick up from there', expected: 'play' },
       { utterance: 'Could you get the podcast going again', expected: 'play' },
       { utterance: 'Let us get back to the podcast', expected: 'return', explanation: true },
-      { utterance: 'Okay, got it', expected: 'return', explanation: true },
+      { utterance: 'Okay, I am done with the side discussion', expected: 'return', explanation: true },
       { utterance: 'Got it, but why?', expected: 'deeper', explanation: true },
       { utterance: 'Could you pause this for a moment', expected: 'pause' },
       { utterance: 'Run it from the top', expected: 'seek' },

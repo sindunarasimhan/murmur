@@ -2,7 +2,6 @@ import type { CatalogResolution, PreparedEpisode } from '../shared/listening';
 import type { CatalogInterpreter } from './catalog-interpreter';
 import type { Repository } from './repository';
 import { ServiceError } from './errors';
-import { exactCommand } from './intelligence';
 
 type CatalogRepository = Pick<Repository, 'catalog' | 'unfinished' | 'charge'>;
 
@@ -43,10 +42,6 @@ export class CatalogService {
       throw new ServiceError(503, 'catalog_preparing', 'The podcast catalog is being prepared. Please try again shortly.');
     }
     const current = episodes.find((episode) => episode.id === currentEpisodeId);
-    // Transport commands already have a deterministic implementation. They do
-    // not select content and continue working when interpretation is unavailable.
-    if (current && exactCommand(utterance)) return { kind: 'current', message: '' };
-
     await this.repository.charge(owner);
     const intent = await this.interpret({
       utterance,
