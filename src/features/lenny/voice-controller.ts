@@ -153,10 +153,18 @@ export class LennyVoiceController {
     this.awaitingFinal = false;
     clearTimeout(this.speakingDeadline); this.speakingDeadline = undefined;
   }
+  private canReopenConsumedHomeWake(text: string, item: string) {
+    const request = this.state.episode ? undefined : wakeRequest(text);
+    return this.wakeItem === item && request !== undefined && request.length > 0
+      && this.engagement === 'catalog-dialogue' && ['thinking', 'speaking', 'followup', 'listening'].includes(this.state.phase);
+  }
   private receive(text: string, item: string, final: boolean): string | undefined {
     if (!this.state.microphone || this.disposed) return;
     const known = this.utterances.get(item);
-    if (known?.kind === 'consumed') return;
+    if (known?.kind === 'consumed') {
+      if (!this.canReopenConsumedHomeWake(text, item)) return;
+      this.recordUtterance(item, { kind: 'pending', epoch: this.epoch, order: ++this.utteranceOrder });
+    }
     if (!text.trim()) {
       if (final) {
         this.recordUtterance(item, { kind: 'consumed' });
@@ -256,7 +264,7 @@ export class LennyVoiceController {
   }
   final(text: string, item: string) {
     if (!this.state.microphone || this.disposed) return;
-    if (this.utterances.get(item)?.kind === 'consumed') return;
+    if (this.utterances.get(item)?.kind === 'consumed' && !this.canReopenConsumedHomeWake(text, item)) return;
     if (/^(?:hey[ ,]+murmur[ ,.!?]*)?(?:please )?(?:stop listening|turn off (?:the )?(?:microphone|mic))[.!?]*$/i.test(text.trim())) {
       this.recordUtterance(item, { kind: 'consumed' }); void this.shutdown(true); return;
     }

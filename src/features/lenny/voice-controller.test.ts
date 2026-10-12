@@ -536,6 +536,33 @@ test('an episode request spoken while the invitation is generating takes priorit
     assert.equal(s.spoken.length, 1); assert(s.playing);
   } finally { await s.controller.dispose(); }
 });
+test('a home wake item that later extends into a request is not discarded', async () => {
+  const s = setup(1000);
+  let finishSpeech!: () => void;
+  const resolved: string[] = [];
+  s.ports.api.resolve = async (text) => {
+    resolved.push(text);
+    return text.includes('Brian Halligan')
+      ? { kind: 'play', episode, message: 'Lenny with Guest One.' }
+      : { kind: 'clarify', message: 'Which show, guest, or topic?' };
+  };
+  s.ports.speech.say = (text) => {
+    s.spoken.push(text);
+    return new Promise<void>((resolve) => { finishSpeech = resolve; });
+  };
+  try {
+    await s.controller.activate();
+    s.controller.final('Hey Murmur', 'wake-item'); await delay();
+    assert.equal(s.controller.state.phase, 'speaking');
+    s.controller.final('Hey Murmur. Could you play the Brian Halligan episode from Lenny?', 'wake-item');
+    finishSpeech(); await delay();
+    for (let i = 0; i < 10 && !s.controller.state.episode; i++) await delay();
+    finishSpeech(); await delay();
+    assert.deepEqual(resolved, ['Could you play the Brian Halligan episode from Lenny?']);
+    assert(s.playing);
+    assert.equal(s.controller.state.episode?.id, episode.id);
+  } finally { await s.controller.dispose(); }
+});
 test('wake transcript remains readable through generated invitation and followup', async () => {
   const s = setup();
   try {
