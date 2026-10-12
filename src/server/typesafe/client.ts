@@ -22,7 +22,8 @@ export function parseChoiceAnswer(value: unknown, question: ChoiceQuestion): Cho
     probabilities[option] = score;
   }
   const scores = Object.values(probabilities);
-  if (Math.abs(scores.reduce((total, score) => total + score, 0) - 1) > 0.01 ||
+  const roundingTolerance = 0.01 + Number.EPSILON * scores.length;
+  if (Math.abs(scores.reduce((total, score) => total + score, 0) - 1) > roundingTolerance ||
       probabilities[value.choice]! < Math.max(...scores)) throw new UpstreamError('invalid');
   return { choice: value.choice, confidence: value.confidence, probabilities };
 }

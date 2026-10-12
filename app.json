@@ -40,8 +40,8 @@
       [
         "expo-audio",
         {
-          "microphonePermission": "Murmur uses the microphone for live voice requests and, while an episode is playing, to detect when you say Hey Murmur. Audio is not stored.",
-          "enableBackgroundPlayback": false,
+          "microphonePermission": "While Murmur is open, it uses the microphone for voice requests and Hey Murmur. The microphone stops when you leave the app. Audio is not stored.",
+          "enableBackgroundPlayback": true,
           "enableBackgroundRecording": false
         }
       ],

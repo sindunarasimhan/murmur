@@ -8,14 +8,16 @@ export function backendConfig() {
   if (production && !process.env.MURMUR_OBJECT_DIR) throw new Error('MURMUR_OBJECT_DIR must point to a persistent mounted volume');
   return {
     providers: getServerConfig(),
+    semanticVoiceModel: process.env.MURMUR_SEMANTIC_VOICE_MODEL ?? 'gpt-4o-transcribe',
     databaseUrl: process.env.DATABASE_URL ?? 'postgres://murmur:murmur-local-development@127.0.0.1:55432/murmur',
     objectDirectory: resolve(process.env.MURMUR_OBJECT_DIR ?? '.murmur-data/objects'),
     port: Number(process.env.MURMUR_BACKEND_PORT ?? 4545),
     host: process.env.MURMUR_BACKEND_HOST ?? '127.0.0.1',
     secureCookies: production,
-    focusEpisodeId: process.env.MURMUR_CATALOG === 'all' ? null : FOCUS_EPISODE_ID,
-    dailyUserCalls: Number(process.env.MURMUR_DAILY_USER_CALLS ?? 60),
-    dailyProjectCalls: Number(process.env.MURMUR_DAILY_PROJECT_CALLS ?? 300),
+    focusEpisodeId: process.env.MURMUR_CATALOG === 'focus' ? FOCUS_EPISODE_ID : null,
+    dailyUserCalls: Number(process.env.MURMUR_DAILY_USER_CALLS ?? 0),
+    dailyProjectCalls: Number(process.env.MURMUR_DAILY_PROJECT_CALLS ?? 0),
+    dailyIdentityCreates: Number(process.env.MURMUR_DAILY_IDENTITY_CREATES ?? 0),
   };
 }
 export type BackendConfig = ReturnType<typeof backendConfig>;

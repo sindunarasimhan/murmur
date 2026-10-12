@@ -1,11 +1,12 @@
 import { z } from 'zod';
-import { catalogResolutionSchema, episodeSchema, sessionSchema, turnResultSchema, type ListeningSession, type Observation, type TurnRequest } from '../../../shared/listening';
-import { resolveApiBaseUrl, resolveExpoDevelopmentHostUri, type SynthesizedSpeech } from './murmur-api-client';
+import { captionTrackSchema, catalogResolutionSchema, episodeSchema, sessionSchema, turnResultSchema, type ListeningSession, type Observation, type TurnRequest } from '../../../shared/listening';
+import { resolveApiBaseUrl, resolveExpoDevelopmentHostUri, type ApiRuntime, type SynthesizedSpeech } from './murmur-api-client';
+import { withRequestDeadline } from './request-deadline';
 
 export class ListeningApiError extends Error {
   constructor(message: string, readonly status: number, readonly code: string) { super(message); }
 }
-function runtime() {
+function runtime(): ApiRuntime {
   if (process.env.EXPO_OS === 'web' || typeof document !== 'undefined') return { platform: 'web' as const };
   // Keep native modules outside Node contract tests.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -14,40 +15,46 @@ function runtime() {
     development: typeof __DEV__ !== 'undefined' && __DEV__, expoHostUri: resolveExpoDevelopmentHostUri(constants) };
 }
 export function listeningBaseUrl() { return `${resolveApiBaseUrl(runtime())}/v2`; }
-export function voiceGatewayUrl() {
-  const configured = process.env.EXPO_PUBLIC_MURMUR_VOICE_URL;
+export function voiceGatewayUrlForRuntime(current: ApiRuntime, configured?: string) {
   if (configured) {
     const url = new URL(configured);
     if (!['wss:', 'ws:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Invalid voice gateway address');
     if (url.protocol === 'ws:' && typeof __DEV__ !== 'undefined' && !__DEV__) throw new Error('Voice requires a secure connection');
     return configured;
   }
-  const current = runtime();
   if (current.platform === 'web') return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.hostname}:4545/v2/voice`;
+  const url = new URL(resolveApiBaseUrl(current));
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = '/v2/voice';
+  if (current.configuredBaseUrl?.trim()) return url.toString();
   if (!current.development) throw new Error('Set the voice gateway address for this build.');
-  const url = new URL(listeningBaseUrl());
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'; url.port = '4545'; url.pathname = '/v2/voice';
+  url.port = '4545';
   return url.toString();
+}
+export function voiceGatewayUrl() {
+  return voiceGatewayUrlForRuntime(runtime(), process.env.EXPO_PUBLIC_MURMUR_VOICE_URL);
 }
 const TOKEN_KEY = 'murmur-listening-identity';
 let token: string | undefined;
 let initialization: Promise<void> | undefined;
-async function raw(path: string, method: string, body?: unknown, signal?: AbortSignal) {
-  const response = await fetch(`${listeningBaseUrl()}${path}`, {
-    method, credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-Murmur-Client': 'v2', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(30_000)]),
+async function raw<T>(path: string, method: string, body: unknown, signal: AbortSignal | undefined, read: (response: Response) => Promise<T>): Promise<T> {
+  return withRequestDeadline(signal, 30_000, async (requestSignal) => {
+    const response = await fetch(`${listeningBaseUrl()}${path}`, {
+      method, credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-Murmur-Client': 'v2', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body), signal: requestSignal,
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new ListeningApiError(result.error?.message ?? 'The listening service is unavailable.', response.status, result.error?.code ?? 'request_failed');
+    }
+    return read(response);
   });
-  if (!response.ok) {
-    const result = await response.json().catch(() => ({}));
-    throw new ListeningApiError(result.error?.message ?? 'The listening service is unavailable.', response.status, result.error?.code ?? 'request_failed');
-  }
-  return response;
 }
 async function identity() {
   if (!initialization) initialization = (async () => {
     const native = runtime().platform === 'native';
     if (native) token = (await import('expo-secure-store')).getItem(TOKEN_KEY) ?? undefined;
-    const result = z.object({ id: z.uuid(), token: z.string().optional() }).parse(await (await raw('/identity', 'POST', {})).json());
+    const result = z.object({ id: z.uuid(), token: z.string().optional() }).parse(await raw('/identity', 'POST', {}, undefined, (response) => response.json()));
     if (native && result.token) {
       token = result.token;
       await (await import('expo-secure-store')).setItemAsync(TOKEN_KEY, token);
@@ -57,10 +64,12 @@ async function identity() {
 }
 async function json<T>(path: string, method: string, schema: z.ZodType<T>, body?: unknown, signal?: AbortSignal): Promise<T> {
   await identity();
-  try { return schema.parse(await (await raw(path, method, body, signal)).json()); }
+  try { return schema.parse(await raw(path, method, body, signal, (response) => response.json())); }
   catch (error) { if (error instanceof ListeningApiError && error.status === 401) initialization = undefined; throw error; }
 }
 export const listeningApi = {
+  invite: async (history: string[], signal?: AbortSignal) => (await json('/catalog/invite', 'POST', z.object({ message: z.string().trim().min(1).max(1000) }), { history }, signal)).message,
+  captions: (episodeId: string, audioVersion: string, signal?: AbortSignal) => json(`/catalog/${encodeURIComponent(episodeId)}/captions?audioVersion=${encodeURIComponent(audioVersion)}`, 'GET', captionTrackSchema, undefined, signal),
   catalog: (signal?: AbortSignal) => json('/catalog', 'GET', z.array(episodeSchema), undefined, signal),
   resolve: (utterance: string, currentEpisodeId: string | undefined, history: string[], signal?: AbortSignal) => json('/catalog/resolve', 'POST', catalogResolutionSchema, { utterance, currentEpisodeId, history }, signal),
   liveTicket: (signal?: AbortSignal) => json('/live-voice-ticket', 'POST', z.object({ token: z.string(), leaseMilliseconds: z.number() }), {}, signal),
@@ -73,8 +82,9 @@ export const listeningApi = {
   ticket: (id: string, signal?: AbortSignal) => json(`/sessions/${id}/voice-ticket`, 'POST', z.object({ clientSecret: z.string(), expiresAt: z.number(), model: z.string(), sampleRate: z.number() }), {}, signal),
   async speech(id: string, turnId: string, signal?: AbortSignal): Promise<SynthesizedSpeech> {
     await identity();
-    const response = await raw(`/sessions/${id}/turns/${turnId}/speech`, 'POST', {}, signal);
-    if (response.headers.get('X-Murmur-Voice-Disclosure') !== 'ai-generated') throw new Error('Speech disclosure is missing');
-    return { audio: await response.arrayBuffer(), mimeType: 'audio/mpeg', disclosure: 'ai-generated' };
+    return raw(`/sessions/${id}/turns/${turnId}/speech`, 'POST', {}, signal, async (response) => {
+      if (response.headers.get('X-Murmur-Voice-Disclosure') !== 'ai-generated') throw new Error('Speech disclosure is missing');
+      return { audio: await response.arrayBuffer(), mimeType: 'audio/mpeg', disclosure: 'ai-generated' };
+    });
   },
 };

@@ -3,8 +3,17 @@ import { isRecord, readUpstreamJson, requestUpstream, UpstreamError } from '../h
 import { REALTIME_SAMPLE_RATE, type RealtimeSurface, type RealtimeTokenResponse } from './contracts';
 
 export async function createTranscriptionSession(surface: RealtimeSurface, options: {
-  apiKey: string; model: string; fetch?: typeof fetch; signal: AbortSignal;
+  apiKey: string; model: string; fetch?: typeof fetch; signal: AbortSignal; keywords?: string[]; turnDetection?: 'semantic';
 }): Promise<RealtimeTokenResponse> {
+  const vocabulary = [...new Set(['Hey Murmur', ...(options.keywords ?? [])].filter((word) => word.trim() && word.length <= 120 && !/[<>\r\n]/.test(word)).map((word) => word.trim()))].slice(0, 128);
+  const prompt = surface === 'episode'
+    ? 'A listener controlling a podcast or asking a question about the current episode. Transcribe the wake phrase Hey Murmur exactly when spoken. Common requests include skip ad, pause, play, go back, and explain that.'
+    : 'A listener choosing a podcast episode by speaking its title, show name, host, or topic.';
+  let semanticPrompt = prompt;
+  for (const word of vocabulary) {
+    const next = `${semanticPrompt}\n${word}`;
+    if (next.length <= 1024) semanticPrompt = next;
+  }
   return requestUpstream('https://api.openai.com/v1/realtime/client_secrets', {
     method: 'POST',
     headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
@@ -14,14 +23,15 @@ export async function createTranscriptionSession(surface: RealtimeSurface, optio
         audio: { input: {
           format: { type: 'audio/pcm', rate: REALTIME_SAMPLE_RATE },
           noise_reduction: { type: 'near_field' },
-          transcription: {
+          transcription: options.turnDetection === 'semantic' ? {
+            model: options.model, language: 'en',
+            prompt: semanticPrompt,
+          } : {
             model: options.model, delay: 'minimal', languages: ['en'],
-            prompt: surface === 'episode'
-              ? 'A listener controlling a podcast or asking a question about the current episode. Transcribe the wake phrase Hey Murmur exactly when spoken. Common requests include skip ad, pause, play, go back, and explain that.'
-              : 'A listener choosing a podcast episode by speaking its title, show name, host, or topic.',
+            keywords: vocabulary,
+            prompt,
           },
-          // gpt-live-transcribe relies on the client's silence detector to commit.
-          turn_detection: null,
+          turn_detection: options.turnDetection === 'semantic' ? { type: 'semantic_vad', eagerness: 'low' } : null,
         } },
       },
     }),

@@ -4,7 +4,7 @@ export const PLAYBACK_AUDIO_MODE: AudioMode = {
   allowsRecording: false,
   interruptionMode: 'doNotMix',
   playsInSilentMode: true,
-  shouldPlayInBackground: false,
+  shouldPlayInBackground: true,
   shouldRouteThroughEarpiece: false,
   allowsBackgroundRecording: false,
 };
