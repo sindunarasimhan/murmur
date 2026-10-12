@@ -4,6 +4,8 @@ export type VoiceCallbacks = {
   partial(text: string, item: string): void;
   final(text: string, item: string): void;
   activity(): void;
+  speechStarted?(): void;
+  speechStopped?(): void;
   error(error: Error): void;
 };
 /** Streaming text stays local and ephemeral unless it becomes a listener command. */
@@ -20,10 +22,13 @@ export class ContinuousTranscription {
   private renewal?: ReturnType<typeof setTimeout>;
   private abort?: AbortController;
   private cancelConnect?: () => void;
+  private semantic = false;
   constructor(private readonly options: {
     url: () => string;
     ticket: (signal: AbortSignal) => Promise<{ token: string; leaseMilliseconds: number }>;
     callbacks: VoiceCallbacks;
+    semanticTurnDetection?: boolean;
+    requireSemanticTurnDetection?: boolean;
     socket?: (url: string, protocols: string[]) => WebSocketLike;
   }) {}
   async start() {
@@ -32,7 +37,11 @@ export class ContinuousTranscription {
     this.abort = new AbortController();
     const ticket = await this.options.ticket(this.abort.signal);
     if (this.closed || generation !== this.generation) return;
-    const socket = (this.options.socket ?? ((url, protocols) => new WebSocket(url, protocols) as unknown as WebSocketLike))(this.options.url(), [`murmur-ticket.${ticket.token}`]);
+    const protocols = [
+      `murmur-ticket.${ticket.token}`,
+      ...(this.options.semanticTurnDetection ? ['murmur-semantic-v1'] : []),
+    ];
+    const socket = (this.options.socket ?? ((url, protocols) => new WebSocket(url, protocols) as unknown as WebSocketLike))(this.options.url(), protocols);
     this.socket = socket;
     await new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -50,13 +59,21 @@ export class ContinuousTranscription {
       socket.onclose = () => fail(new Error('The microphone connection ended. Your place is saved.'));
       socket.onmessage = ({ data }) => {
         if (typeof data !== 'string' || this.closed || generation !== this.generation) return;
-        let event: { type: string; item_id?: string; delta?: string; transcript?: string; message?: string };
+        let event: { type: string; item_id?: string; delta?: string; transcript?: string; message?: string; turnDetection?: string };
         try { event = JSON.parse(data); } catch { return fail(new Error('Voice returned an unreadable response.')); }
         if (event.type === 'ready') {
+          this.semantic = event.turnDetection === 'semantic';
+          if (this.options.requireSemanticTurnDetection && !this.semantic) {
+            return fail(new Error('Semantic turn detection is unavailable. Reopen Murmur to try again.'));
+          }
           this.ready = true; settled = true; clearTimeout(timer); this.resetBuffer(); resolve();
           this.renewal = setTimeout(() => { void this.renew().catch((error: Error) => this.options.callbacks.error(error)); }, ticket.leaseMilliseconds - 10_000);
         } else if (event.type === 'error') fail(new Error(event.message ?? 'Voice is temporarily unavailable.'));
         else if (event.type === 'renew') { void this.renew().catch((error: Error) => this.options.callbacks.error(error)); }
+        else if (event.type === 'input_audio_buffer.speech_started') {
+          this.options.callbacks.speechStarted?.();
+          this.options.callbacks.activity();
+        } else if (event.type === 'input_audio_buffer.speech_stopped') this.options.callbacks.speechStopped?.();
         else if (event.item_id && event.type.endsWith('.delta') && typeof event.delta === 'string') {
           const text = `${this.texts.get(event.item_id) ?? ''}${event.delta}`.slice(-6000);
           this.texts.set(event.item_id, text);
@@ -86,10 +103,10 @@ export class ContinuousTranscription {
     let energy = 0;
     for (let i = 0; i < samples.length; i += 8) energy += ((samples[i] ?? 0) / 32768) ** 2;
     const loud = Math.sqrt(energy / Math.ceil(samples.length / 8)) > 0.008;
-    if (loud) { this.voiced = true; this.silenceAt = 0; this.options.callbacks.activity(); }
+    if (loud && !this.semantic) { this.voiced = true; this.silenceAt = 0; this.options.callbacks.activity(); }
     else if (this.voiced) this.silenceAt ||= now;
     // Bound monitoring text without waiting for the podcast itself to go silent.
-    if ((this.silenceAt && now - this.silenceAt >= 900) || now - this.startedAt > 8000 || this.bytes >= 48_000 * 12) this.commit();
+    if (!this.semantic && ((this.silenceAt && now - this.silenceAt >= 900) || now - this.startedAt > 8000 || this.bytes >= 48_000 * 12)) this.commit();
   }
   commit() {
     if (this.ready && this.socket?.readyState === 1 && this.bytes >= 4800) {

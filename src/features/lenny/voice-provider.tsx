@@ -74,7 +74,7 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
       audio: {
         position: () => Number.isFinite(player.currentTime) ? player.currentTime : 0,
         playing: () => player.playing,
-        setDucked: (ducked) => { player.volume = ducked ? 0.2 : 1; },
+        setDucked: (ducked) => { player.volume = ducked ? 0.1 : 1; },
         load: async (episode, position, signal) => {
           if (!episode.audioPath) throw new Error('That episode’s audio is unavailable.');
           const uri = episode.audioPath.startsWith('https://') ? episode.audioPath : `${listeningBaseUrl()}${episode.audioPath}`;
@@ -102,6 +102,8 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
           }
           const live = new ContinuousTranscription({
             url: () => voiceGatewayUrl().replace(/\/voice$/, '/live-voice'), ticket: (signal) => listeningApi.liveTicket(signal),
+            semanticTurnDetection: true,
+            requireSemanticTurnDetection: true,
             callbacks: { partial: (text, id) => {
               if (generation !== captureGeneration.current) return;
               if (__DEV__ && wakeRequest(text) !== undefined) console.info('[murmur-voice] partial-wake', { phase: instance.state.phase });
@@ -111,7 +113,16 @@ export function LennyVoiceProvider({ children }: { children: ReactNode }) {
               if (__DEV__) console.info('[murmur-voice] transcript-final', { wake: wakeRequest(text) !== undefined, characters: text.length, phase: instance.state.phase });
               instance.final(text, id);
             },
-              activity: () => { if (generation === captureGeneration.current) instance.activity(); }, error: (error) => {
+              activity: () => { if (generation === captureGeneration.current) instance.activity(); },
+              speechStarted: () => {
+                if (__DEV__ && generation === captureGeneration.current) console.info('[murmur-voice] speech-started', { phase: instance.state.phase });
+                if (generation === captureGeneration.current) instance.inputSpeechStarted();
+              },
+              speechStopped: () => {
+                if (__DEV__ && generation === captureGeneration.current) console.info('[murmur-voice] speech-stopped', { phase: instance.state.phase });
+                if (generation === captureGeneration.current) instance.inputSpeechStopped();
+              },
+              error: (error) => {
                 if (generation !== captureGeneration.current) return;
                 if (__DEV__) console.info('[murmur-voice] transcription-failed', { screen: instance.state.episode ? 'detail' : 'home', phase: instance.state.phase });
                 void instance.fail(error);

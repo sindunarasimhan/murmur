@@ -59,7 +59,7 @@ export class LennyVoiceController {
     if (this.detail.kind === 'monitoring') {
       this.detail = { kind, origin: this.ports.audio.position(), wasPlaying: this.ports.audio.playing(), restoreOnDismiss: true };
       this.resumeAfterConversation = this.detail.wasPlaying;
-      this.ports.audio.pause();
+      if (this.detail.wasPlaying) this.ports.audio.setDucked(true);
     } else this.detail = { ...this.detail, kind };
   }
   private settleDetail(outcome: 'complete' | 'dismiss' = 'complete') {
@@ -318,6 +318,16 @@ export class LennyVoiceController {
   speechEnergy(level: number) {
     if (this.state.speechPlaying) this.update({ speechLevel: level });
   }
+  inputSpeechStarted() {
+    if (!this.state.episode || this.detail.kind !== 'monitoring' || !this.ports.audio.playing()) return;
+    this.ports.audio.setDucked(true);
+    this.update({ caption: 'Listening for “Hey Murmur”…' });
+  }
+  inputSpeechStopped() {
+    if (!this.state.episode || this.detail.kind !== 'monitoring') return;
+    this.ports.audio.setDucked(false);
+    this.update({ caption: 'Say “Hey Murmur” whenever you need me.' });
+  }
   private async say(text: string, epoch: number, turn?: TurnResult) {
     if (!this.current(epoch)) return;
     const reference = { text, expires: Number.POSITIVE_INFINITY };
@@ -433,7 +443,10 @@ export class LennyVoiceController {
         if (turn.followUp !== false) {
           this.ports.audio.pause();
           this.ports.audio.setDucked(false);
-          if (this.detail.kind !== 'monitoring') this.detail = { ...this.detail, kind: 'exploring', restoreOnDismiss: false };
+          if (this.detail.kind !== 'monitoring') {
+            const { origin, wasPlaying } = this.detail;
+            this.detail = { kind: 'exploring', origin, wasPlaying, restoreOnDismiss: false };
+          }
           this.engagement = 'episode-dialogue';
           this.remember(text, turn.answer);
         }
