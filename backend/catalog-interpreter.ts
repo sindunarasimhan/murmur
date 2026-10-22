@@ -26,8 +26,6 @@ const STARTUP_ACTIONS = ['restart', 'enable-ad-skipping', 'skip-intro'] as const
 type StartupAction = typeof STARTUP_ACTIONS[number];
 const isStartupAction = (value: string): value is StartupAction => STARTUP_ACTIONS.includes(value as StartupAction);
 const TOPIC_STOPWORDS = new Set<string>(['a', 'an', 'and', 'any', 'about', 'can', 'could', 'episode', 'episodes', 'find', 'for', 'good', 'hear', 'interesting', 'interview', 'listen', 'me', 'on', 'play', 'please', 'podcast', 'podcasts', 'put', 'show', 'something', 'the', 'to', 'today', 'you']);
-const PLAYBACK_WORDS = new Set<string>(['find', 'hear', 'listen', 'play', 'podcast', 'podcasts', 'put', 'show', 'start']);
-const TOPIC_MARKERS = new Set<string>(['about', 'around', 'on', 'topic', 'topics', 'something']);
 const TOPIC_CANDIDATE_LIMIT = 12;
 
 function tokens(text: string): string[] {
@@ -38,40 +36,8 @@ function presentText(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
-function editDistanceAtMostOne(a: string, b: string) {
-  if (a === b) return true;
-  if (Math.abs(a.length - b.length) > 1 || Math.min(a.length, b.length) < 3) return false;
-  let edits = 0;
-  for (let i = 0, j = 0; i < a.length || j < b.length;) {
-    if (a[i] === b[j]) { i++; j++; continue; }
-    if (++edits > 1) return false;
-    if (a.length > b.length) i++;
-    else if (b.length > a.length) j++;
-    else { i++; j++; }
-  }
-  return true;
-}
-
-function containsOrdered(haystack: string[], needle: string[]) {
-  let index = 0;
-  for (const token of haystack) {
-    if (editDistanceAtMostOne(token, needle[index] ?? '')) index++;
-    if (index === needle.length) return true;
-  }
-  return false;
-}
-
-function lexicalEpisodeCandidates(context: CatalogContext) {
-  const utterance = tokens(context.utterance);
-  return context.episodes.filter((episode) => {
-    const aliases = [episode.guest, episode.showTitle, episode.title].filter((x): x is string => !!x);
-    return aliases.some((alias) => {
-      const aliasTokens = tokens(alias);
-      return aliasTokens.length > 0 && containsOrdered(utterance, aliasTokens);
-    });
-  }).map((episode) => episode.id);
-}
-
+// Only ranks suggestions AFTER a semantic unavailable judgment. Never narrows
+// the selection candidates or establishes whether requested content exists.
 function topicEpisodeCandidates(context: CatalogContext) {
   const query = tokens(context.utterance).filter((token) => !TOPIC_STOPWORDS.has(token));
   if (!query.length) return [];
@@ -84,32 +50,6 @@ function topicEpisodeCandidates(context: CatalogContext) {
     .slice(0, TOPIC_CANDIDATE_LIMIT)
     .map(({ episode }) => episode);
   return scored;
-}
-
-function directEpisodeCandidates(context: CatalogContext) {
-  const query = topicQueryTokens(context.utterance);
-  if (!query.length) return [];
-  return context.episodes.filter((episode) => {
-    const coreTokens = tokens([episode.title, episode.showTitle, episode.guest].filter(presentText).join(' '));
-    return containsOrdered(coreTokens, query);
-  });
-}
-
-function topicQueryTokens(utterance: string) {
-  return tokens(utterance).filter((token) => !TOPIC_STOPWORDS.has(token));
-}
-
-function isUnspecifiedPlaybackRequest(utterance: string) {
-  const utteranceTokens = tokens(utterance);
-  return utteranceTokens.some((token) => PLAYBACK_WORDS.has(token)) && topicQueryTokens(utterance).length === 0;
-}
-
-function isTopicPlaybackRequest(utterance: string) {
-  return tokens(utterance).some((token) => TOPIC_MARKERS.has(token));
-}
-
-function hasStartupModifier(utterance: string) {
-  return tokens(utterance).some((token) => ['ad', 'ads', 'beginning', 'intro', 'opening', 'start'].includes(token));
 }
 
 function unavailable(context: CatalogContext): CatalogIntent {
@@ -138,7 +78,7 @@ const actionQuestion: ChoiceQuestion = {
 
 const catalogMatchQuestion: ChoiceQuestion = {
   type: 'choice',
-  instructions: 'Does the content requested by spoken `utterance` exist in `episodes`? Match shows against showTitle, people against guest, and subjects against title or description. A person’s name followed by podcast or interview can request an episode featuring that guest, not a show literally named after the person. Allow unambiguous phonetic spellings or minor transcription errors in names when the catalog supports the same person; do not substitute a different person or unrelated show. For a follow-up accepting an assistant offer in `history`, evaluate that offered content. The current episode is not evidence that a different requested show exists.',
+  instructions: 'Does the content requested by the complete spoken `utterance` exist in `episodes`? Interpret meaning, including paraphrases, abbreviated show names, hesitations, negation and corrections, rather than word order. Combine the requested show, guest and subject as constraints on the same episode; a match on one does not override a conflict on another. Match shows against showTitle, people against guest, and subjects against title or description. Merely mentioning a person or show in a description does not make that record an episode featuring that guest or published by that show. A person’s name followed by podcast or interview can request an episode featuring that guest, not a show literally named after the person. Allow unambiguous phonetic spellings or minor transcription errors in names when the catalog supports the same person; do not substitute a different person or unrelated show. For a follow-up accepting an assistant offer in `history`, evaluate that offered content. The current episode is not evidence that a different requested show exists. Multiple matching episodes mean available but potentially ambiguous, not unavailable.',
   criteria: {
     available: 'The intended show, guest, or subject matches an available episode, including an unambiguous spoken-name spelling variant.',
     unavailable: 'The intended show, person, or subject is absent, not merely spelled differently by transcription.',
@@ -164,21 +104,6 @@ export function createCatalogInterpreter(
   return async (context, signal) => {
     if (!provider.apiKey) {
       throw new ServiceError(503, 'decision_unavailable', 'Murmur cannot interpret that request right now.');
-    }
-    if (isUnspecifiedPlaybackRequest(context.utterance)) return { kind: 'recommend' };
-    const earlyTopicTokens = topicQueryTokens(context.utterance);
-    const playbackRequested = tokens(context.utterance).some((token) => PLAYBACK_WORDS.has(token));
-    if (!hasStartupModifier(context.utterance) && playbackRequested && earlyTopicTokens.length) {
-      if (isTopicPlaybackRequest(context.utterance)) {
-        const earlyTopicCandidates = topicEpisodeCandidates(context);
-        if (!earlyTopicCandidates.length) return unavailable(context);
-        return { kind: 'select', episodeId: earlyTopicCandidates[0]!.id };
-      }
-      const earlyLexicalCandidates = lexicalEpisodeCandidates(context);
-      if (earlyLexicalCandidates.length === 1) return { kind: 'select', episodeId: earlyLexicalCandidates[0]! };
-      const directCandidates = directEpisodeCandidates(context);
-      if (directCandidates.length === 1) return { kind: 'select', episodeId: directCandidates[0]!.id };
-      if (!directCandidates.length) return unavailable(context);
     }
     const state = {
       ...context,
@@ -211,30 +136,15 @@ export function createCatalogInterpreter(
     const select = (episodeId: string, initialAction = fallbackInitialAction()): CatalogIntent => initialAction
       ? { kind: 'select', episodeId, initialAction }
       : { kind: 'select', episodeId };
-    const lexicalCandidates = lexicalEpisodeCandidates(context);
-    if (lexicalCandidates.length === 1) {
-      return select(lexicalCandidates[0]!);
-    }
-
-    const candidateEpisodes = topicEpisodeCandidates(context);
-    const topicTokens = topicQueryTokens(context.utterance);
-    if (topicTokens.length && !candidateEpisodes.length) {
-      return unavailable(context);
-    }
-    if (topicTokens.length && candidateEpisodes.length === 1) {
-      return select(candidateEpisodes[0]!.id);
-    }
-    const matchEpisodes = candidateEpisodes.length ? candidateEpisodes : context.episodes;
-    const matchState = matchEpisodes.length === context.episodes.length
-      ? state
-      : { ...state, episodes: matchEpisodes };
-    const match = await choices(matchState, {
+    // Keep every eligible record in the bounded choice. Lexical overlap cannot
+    // select, reject, or remove an episode before interpreting the full request.
+    const match = await choices(state, {
       catalogMatch: catalogMatchQuestion,
       episode: {
         type: 'choice',
-        instructions: 'Assuming the listener wants an available episode, which option matches their request? A show request matches an episode with that showTitle; it need not name the episode title or guest. For agreement with the latest assistant offer in `history`, choose the offered episode. Otherwise match the named guest, title, or subject. Choose none if no option fits.',
+        instructions: 'Assuming the listener wants an available episode, which option matches the complete request in `utterance` and `history`? Interpret meaning rather than literal word order. Combine the requested guest, show, title and topic as constraints on the same record, respecting negation and corrections. Conversational filler, paraphrases and abbreviated show names do not change the intended target. A show-only request may match any episode of that show; an explicitly named guest must also match when supplied. A mention in a description does not make that person the guest or that show the publisher. For agreement with the latest assistant offer in history, choose the offered episode. Choose none if no record satisfies the request; do not relax a conflicting show or guest constraint to force a match.',
         criteria: {
-          ...Object.fromEntries(matchEpisodes.map((episode) => [episode.id,
+          ...Object.fromEntries(context.episodes.map((episode) => [episode.id,
             `An episode of “${episode.showTitle}” titled “${episode.title}”. ${episode.guest ? `Guest: ${episode.guest}. ` : ''}${episode.description}`])),
           none: 'No supplied episode matches the request.',
         },
