@@ -25,6 +25,14 @@ type Case = {
   history?: string[];
 };
 const cases: Case[] = [
+  ...['play it', 'Sounds good, let’s hear that', 'Go ahead with the one you mentioned', 'Put that on for me', 'Sure, start the interview', 'That sounds interesting, let’s listen'].map((utterance): Case => ({
+    utterance, kind: 'play', expectedEpisode: design.id, catalog: [mars, design],
+    history: ['What is available?', `I have “${design.title}” from ${design.showTitle}. Would you like to play it?`],
+  })),
+  ...['No, don’t play that', 'Not yet', 'I am talking to someone else about dinner', 'Maybe, I haven’t decided', 'Play the Daily instead'].map((utterance): Case => ({
+    utterance, kind: 'clarify', catalog: [mars, design],
+    history: ['What is available?', `I have “${design.title}” from ${design.showTitle}. Would you like to play it?`],
+  })),
   { utterance: 'Could you put on the Maya Chen interview?', kind: 'play', expectedEpisode: mars.id },
   { utterance: 'Play the one about deep-space navigation', kind: 'play', expectedEpisode: mars.id },
   { utterance: 'I would like to hear Design Fieldwork', kind: 'play', expectedEpisode: design.id },

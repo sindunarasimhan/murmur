@@ -2,6 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { askChoices, parseChoiceAnswer, type ChoiceQuestion } from './client';
 
+test('rounded Jev probabilities at the existing one-percent tolerance survive floating-point error', () => {
+  const probabilities = { p24: 0.01, none: 0.23, p49: 0, p86: 0, p15: 0.02, p13: 0.11, p9: 0.28, p125: 0.34, p54: 0 };
+  const rounded: ChoiceQuestion = { type: 'choice', instructions: 'Choose a passage', criteria: Object.fromEntries(Object.keys(probabilities).map((key) => [key, key])) };
+  const answer = { type: 'choice', choice: 'p125', confidence: 0.26, probabilities };
+  assert.equal(parseChoiceAnswer(answer, rounded).choice, 'p125');
+  assert.throws(() => parseChoiceAnswer({ ...answer, probabilities: { ...probabilities, p125: 0.33 } }, rounded));
+});
+
 const question: ChoiceQuestion = { type: 'choice', instructions: 'Choose an option.', criteria: { a: 'First', b: 'Second' } };
 const answer = { type: 'choice', choice: 'a', confidence: 0.8, probabilities: { a: 0.9, b: 0.1 } };
 

@@ -126,3 +126,20 @@ test('incomplete, primitive, or empty OpenAI responses cannot appear as successf
     assert.equal(response.status, 502);
   }
 });
+
+test('web search is only enabled when explicitly requested for an answer', async () => {
+  const { requestOpenAIExploreAnswer } = await import('./openai-responses');
+  for (const allowWebSearch of [false, true]) {
+    await requestOpenAIExploreAnswer(input, {
+      apiKey: 'openai-secret',
+      allowWebSearch,
+      instructions: 'Answer briefly.',
+      fetchImpl: async (_url, init) => {
+        const payload = JSON.parse(String(init?.body));
+        assert.equal(Array.isArray(payload.tools), allowWebSearch);
+        if (allowWebSearch) assert.deepEqual(payload.tools, [{ type: 'web_search' }]);
+        return Response.json({ output_text: 'Answer.' });
+      },
+    });
+  }
+});

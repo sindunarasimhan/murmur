@@ -286,6 +286,22 @@ test('speech proxies configured generation and returns disclosed MP3 audio', asy
   assert.deepEqual(new Uint8Array(await response.arrayBuffer()), mp3);
 });
 
+test('expressive speech keeps the requested words and configured voice while directing a conversational delivery', async () => {
+  let body: Record<string, string> = {};
+  const response = await handleSpeechRequest(speechRequest({ text: 'Skipping the ad, then continuing.' }), {
+    environment: { OPENAI_API_KEY: 'server-secret', OPENAI_SPEECH_MODEL: 'gpt-4o-mini-tts', OPENAI_SPEECH_VOICE: 'coral' },
+    fetch: async (_input, init) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(new Uint8Array([0x49, 0x44, 0x33, 0x03]), { headers: { 'Content-Type': 'audio/mpeg' } });
+    },
+  });
+  assert.equal(response.status, 200);
+  assert.equal(body.input, 'Skipping the ad, then continuing.');
+  assert.equal(body.voice, 'coral');
+  assert.match(body.instructions!, /natural conversational inflection/);
+  assert.match(body.instructions!, /do not add greetings, fillers, laughs, or sound effects/);
+});
+
 test('OpenAI rate limits become retryable errors without exposing provider details', async () => {
   const response = await handleSpeechRequest(speechRequest({ text: 'Explain that.' }), {
     environment: { OPENAI_API_KEY: 'server-secret' },

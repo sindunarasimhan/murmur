@@ -1,0 +1,40 @@
+Murmur backlog
+
+Bugs
+====
+
+2026-10-08 — Native playback captions do not update in real time
+Status: deferred, reported by user during physical-iPhone testing.
+The user reported that time skipping and the other tested functionality worked
+well, but the podcast transcript did not update as the episode played.
+Investigate caption timing, cue availability, and native UI updates before
+attributing a cause. Keep this separate from automatic ad-skipping work.
+Acceptance: displayed podcast captions follow actual playback position during
+normal playback and after a seek, while preserving the user-transcript display
+during voice interaction. Verify on the phone; do not claim word-level timing
+where the source transcript only provides coarse segments.
+
+2026-10-08 — Ad-setting acknowledgement recovery after failed navigation
+Status: deferred by explicit user request; do not resume without consent.
+If an ad-setting acknowledgement commits remotely but its response is lost,
+then an attempted episode switch or return home also fails, preserve enough
+recovery state for commands on the original episode to continue. Review found
+that abandoning recovery before departure succeeds can leave a stale session.
+Some corrective changes were already underway when deferred; those changes do
+not establish that this edge case is verified. Check their final state first.
+Acceptance: simulate a committed-but-lost acknowledgement followed by failed
+episode opening or failed home confirmation, then successfully pause/resume the
+original episode. Late responses must not change a replacement episode.
+
+Ideas
+=====
+
+2026-10-08 — Settings-driven batch transcript and ad-marker preparation
+Status: future idea only; not part of the current implementation scope.
+Offer a setting where the user can change the ad-skipping preference and trigger
+batch preparation/storage of episode transcripts and associated ad markers in
+one operation, with a visible progress spinner or progress indicator.
+Reuse the original recordings and timeline; stored markers enable automatic
+seeks over ads rather than generating edited audio or restarting playback.
+The episode selection scope and preference persistence are future design
+decisions. Do not implement this settings or batch-progress UI now.
