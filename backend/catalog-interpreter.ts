@@ -144,8 +144,10 @@ export function createCatalogInterpreter(
         type: 'choice',
         instructions: 'Assuming the listener wants an available episode, which option matches the complete request in `utterance` and `history`? Interpret meaning rather than literal word order. Combine the requested guest, show, title and topic as constraints on the same record, respecting negation and corrections. Conversational filler, paraphrases and abbreviated show names do not change the intended target. A show-only request may match any episode of that show; an explicitly named guest must also match when supplied. A mention in a description does not make that person the guest or that show the publisher. For agreement with the latest assistant offer in history, choose the offered episode. Choose none if no record satisfies the request; do not relax a conflicting show or guest constraint to force a match.',
         criteria: {
-          ...Object.fromEntries(context.episodes.map((episode) => [episode.id,
-            `An episode of “${episode.showTitle}” titled “${episode.title}”. ${episode.guest ? `Guest: ${episode.guest}. ` : ''}${episode.description}`])),
+          // Metadata already exists in state. Repeating long descriptions in
+          // every option can exceed the provider budget for the hosted catalog.
+          ...Object.fromEntries(context.episodes.map((episode, index) => [episode.id,
+            `The episode described in episodes[${index}].`])),
           none: 'No supplied episode matches the request.',
         },
       },

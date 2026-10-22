@@ -226,7 +226,7 @@ test('Jev candidate arguments are generated from the supplied catalog', async ()
     }
     assert(Object.hasOwn(all.episode!.criteria, mars.id));
     assert(Object.hasOwn(all.episode!.criteria, 'none'));
-    assert(all.episode!.criteria[mars.id]!.includes(mars.showTitle));
+    assert.equal(all.episode!.criteria[mars.id], 'The episode described in episodes[0].');
     checked = true;
     return { catalogMatch: choice('available'), episode: choice(design.id) } as Record<K, ChoiceAnswer>;
   };

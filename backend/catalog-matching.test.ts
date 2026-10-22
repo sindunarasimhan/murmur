@@ -22,6 +22,40 @@ const answer = (choice: string, probabilities = { [choice]: 1 }): ChoiceAnswer =
 const provider = { apiKey: 'test-only', model: 'test-only' };
 const signal = () => new AbortController().signal;
 
+test('catalog choices reference complete metadata without duplicating descriptions', async () => {
+  const large = Array.from({ length: 72 }, (_, index) => ({
+    ...episodes[index % episodes.length]!, id: `episode-${index}`,
+    description: `Unique description ${index}: ${'Additional published episode context. '.repeat(50)}`,
+  }));
+  let checked = false;
+  const choices: typeof askChoices = async <K extends string>(state: unknown, questions: Record<K, unknown>) => {
+    assert.deepEqual((state as CatalogContext).episodes, large);
+    if ('episode' in questions) {
+      checked = true;
+      const criteria = (questions.episode as { criteria: Record<string, string> }).criteria;
+      assert.equal(Object.keys(criteria).length, large.length + 1);
+      large.forEach((episode, index) => assert.equal(criteria[episode.id], `The episode described in episodes[${index}].`));
+      assert(JSON.stringify(questions).length < 12000, 'Questions must not embed a second copy of the catalog');
+    }
+    return { action: answer('choose'), initialAction: answer('none'), catalogMatch: answer('available'), episode: answer(large[0]!.id) } as Record<K, ChoiceAnswer>;
+  };
+  assert.deepEqual(await createCatalogInterpreter(provider, choices)({ utterance: 'Choose the requested interview', episodes: large, history: [] }, signal()), { kind: 'select', episodeId: large[0]!.id });
+  assert(checked);
+});
+
+test('current-episode routing stops before catalog selection while a switch reaches matching', async () => {
+  for (const action of ['current', 'resume', 'choose']) {
+    const phases: string[][] = [];
+    const choices: typeof askChoices = async <K extends string>(_state: unknown, questions: Record<K, unknown>) => {
+      phases.push(Object.keys(questions));
+      return { action: answer(action), initialAction: answer('none'), catalogMatch: answer('available'), episode: answer('brian') } as Record<K, ChoiceAnswer>;
+    };
+    const result = await createCatalogInterpreter(provider, choices)({ utterance: 'A completed contextual request', currentEpisodeId: 'cat', history: [], episodes }, signal());
+    assert.deepEqual(result, action === 'choose' ? { kind: 'select', episodeId: 'brian' } : { kind: action });
+    assert.equal(phases.length, action === 'choose' ? 2 : 1);
+  }
+});
+
 test('every matching variant reaches interpretation with full text, history and all eligible IDs', async () => {
   for (const utterance of variants) {
     const history = ['Which guest?', 'Cat Wu or Brian Halligan?'];
@@ -88,5 +122,30 @@ test('live matching preserves guest and show context against the actual stored c
   for (const utterance of variants) {
     const result = await interpret({ utterance, history: [], episodes: catalog }, signal());
     assert.deepEqual(result, { kind: 'select', episodeId: expected.id }, utterance);
+  }
+});
+
+test('live production-sized catalog supports controls, discussion and switching midstream', { skip: !process.env.MURMUR_MATCHING_CATALOG_URL }, async () => {
+  const response = await fetch(process.env.MURMUR_MATCHING_CATALOG_URL!, { signal: AbortSignal.timeout(15000) });
+  assert(response.ok, 'Catalog snapshot must load successfully');
+  const catalog = await response.json() as CatalogContext['episodes'];
+  const metadata = catalog.map(({ id, title, showTitle, guest, description }) => ({ id, title, showTitle, guest, description }));
+  const current = metadata.find((episode) => episode.guest === 'Cat Wu');
+  const next = metadata.find((episode) => episode.guest === 'Brian Halligan');
+  assert(current && next, 'Both episode fixtures must be present');
+  const interpret = createCatalogInterpreter(backendConfig().providers.typesafe);
+  const history = ['What does product taste mean?', 'It is judgment about which product choices serve users well.'];
+  const cases = [
+    ['Pause', 'current'], ['Skip this ad', 'current'], ['Skip all ads in this podcast', 'current'],
+    ['Tell me more about the podcast guest’s point', 'current'], ['How do you develop that?', 'current'],
+    ['Continue playing this episode', 'resume'], ['Play Brian Halligan instead', 'select'],
+  ] as const;
+  for (const [utterance, expectedKind] of cases) {
+    const result = await interpret({ utterance, currentEpisodeId: current.id, history, episodes: metadata }, signal());
+    assert.equal(result.kind, expectedKind, `${utterance}: ${JSON.stringify(result)}`);
+    if (result.kind === 'select') assert.equal(result.episodeId, next.id);
+  }
+  for (const utterance of variants) {
+    assert.deepEqual(await interpret({ utterance, history: [], episodes: metadata }, signal()), { kind: 'select', episodeId: current.id }, utterance);
   }
 });
