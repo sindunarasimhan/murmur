@@ -2,6 +2,7 @@ import type { CatalogResolution, PreparedEpisode } from '../shared/listening';
 import type { CatalogInterpreter } from './catalog-interpreter';
 import type { Repository } from './repository';
 import { ServiceError } from './errors';
+import { fallbackResolution } from './catalog-fallback';
 
 type CatalogRepository = Pick<Repository, 'catalog' | 'unfinished' | 'charge'>;
 
@@ -25,9 +26,6 @@ function clarification(episodes: PreparedEpisode[], candidateIds: string[] = [],
     message = `Did you mean “${candidates[0]!.title}” or “${candidates[1]!.title}”?`;
   } else if (current) {
     message = 'Could you repeat what you would like me to do with this episode?';
-  } else if (episodes.length === 1) {
-    const episode = episodes[0]!;
-    message = `I have “${episode.title}” from ${episode.showTitle}. Would you like to play it?`;
   }
   return { kind: 'clarify', message };
 }
@@ -47,7 +45,7 @@ export class CatalogService {
       utterance,
       currentEpisodeId: current?.id,
       history,
-      episodes: episodes.map(({ id, title, showTitle, guest, description }) => ({ id, title, showTitle, guest, description })),
+      episodes: episodes.map(({ id, title, showTitle, guest, description, durationSeconds }) => ({ id, title, showTitle, guest, description, durationSeconds })),
     }, signal);
     signal.throwIfAborted();
 
@@ -57,13 +55,13 @@ export class CatalogService {
         return selected ? play(selected, intent.initialAction) : clarification(episodes);
       }
       case 'recommend':
-        return play(episodes[0]!);
+        return fallbackResolution(episodes, { question: 'topic', candidateIds: [] });
       case 'resume': {
         if (current) return { kind: 'current', message: '' };
         const unfinished = await this.repository.unfinished(owner);
         const selected = episodes.find((episode) => episode.id === unfinished?.id);
         if (selected) return play(selected);
-        return episodes.length === 1 ? play(episodes[0]!) : clarification(episodes);
+        return clarification(episodes);
       }
       case 'current':
         return current ? { kind: 'current', message: '' } : clarification(episodes);
@@ -74,6 +72,7 @@ export class CatalogService {
       case 'cancel':
         return { kind: 'cancel', message: '' };
       case 'clarify':
+        if (intent.fallback) return fallbackResolution(episodes, intent.fallback, intent.reason === 'unavailable');
         return clarification(episodes, intent.candidateIds, current, intent.reason);
     }
   }

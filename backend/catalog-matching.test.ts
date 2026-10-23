@@ -37,7 +37,7 @@ test('catalog choices reference complete metadata without duplicating descriptio
       large.forEach((episode, index) => assert.equal(criteria[episode.id], `The episode described in episodes[${index}].`));
       assert(JSON.stringify(questions).length < 12000, 'Questions must not embed a second copy of the catalog');
     }
-    return { action: answer('choose'), initialAction: answer('none'), catalogMatch: answer('available'), episode: answer(large[0]!.id) } as Record<K, ChoiceAnswer>;
+    return { action: answer('choose'), initialAction: answer('none'), catalogMatch: answer('available'), playbackPermission: answer('requested'), episode: answer(large[0]!.id) } as Record<K, ChoiceAnswer>;
   };
   assert.deepEqual(await createCatalogInterpreter(provider, choices)({ utterance: 'Choose the requested interview', episodes: large, history: [] }, signal()), { kind: 'select', episodeId: large[0]!.id });
   assert(checked);
@@ -48,7 +48,7 @@ test('current-episode routing stops before catalog selection while a switch reac
     const phases: string[][] = [];
     const choices: typeof askChoices = async <K extends string>(_state: unknown, questions: Record<K, unknown>) => {
       phases.push(Object.keys(questions));
-      return { action: answer(action), initialAction: answer('none'), catalogMatch: answer('available'), episode: answer('brian') } as Record<K, ChoiceAnswer>;
+      return { action: answer(action), initialAction: answer('none'), catalogMatch: answer('available'), playbackPermission: answer('requested'), episode: answer('brian') } as Record<K, ChoiceAnswer>;
     };
     const result = await createCatalogInterpreter(provider, choices)({ utterance: 'A completed contextual request', currentEpisodeId: 'cat', history: [], episodes }, signal());
     assert.deepEqual(result, action === 'choose' ? { kind: 'select', episodeId: 'brian' } : { kind: action });
@@ -62,14 +62,14 @@ test('every matching variant reaches interpretation with full text, history and 
     let calls = 0;
     const choices: typeof askChoices = async <K extends string>(state: unknown, questions: Record<K, unknown>) => {
       calls++;
-      assert.deepEqual(state, { utterance, episodes, currentEpisodeId: 'orbit', history: [
+      assert.deepEqual(state, { utterance, episodes, currentEpisodeId: 'orbit', recentOffers: [], history: [
         { role: 'user', text: history[0] }, { role: 'assistant', text: history[1] },
       ] });
       if ('episode' in questions) {
         const question = questions.episode as { criteria: Record<string, string> };
         assert.deepEqual(Object.keys(question.criteria), [...episodes.map((episode) => episode.id), 'none']);
       }
-      return { action: answer('choose'), initialAction: answer('none'), catalogMatch: answer('available'), episode: answer('cat') } as Record<K, ChoiceAnswer>;
+      return { action: answer('choose'), initialAction: answer('none'), catalogMatch: answer('available'), playbackPermission: answer('requested'), episode: answer('cat') } as Record<K, ChoiceAnswer>;
     };
     const result = await createCatalogInterpreter(provider, choices)({ utterance, history, currentEpisodeId: 'orbit', episodes }, signal());
     assert.deepEqual(result, { kind: 'select', episodeId: 'cat' }, utterance);

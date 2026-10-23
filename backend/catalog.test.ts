@@ -26,9 +26,9 @@ function decisions(answers: Record<string, ChoiceAnswer>): typeof askChoices {
 function choice(value: string, probabilities: Record<string, number> = { [value]: 1 }): ChoiceAnswer {
   return { choice: value, confidence: 1, probabilities };
 }
-function interpreter(overrides: Partial<Record<'action' | 'catalogMatch' | 'episode' | 'initialAction', ChoiceAnswer>> = {}) {
+function interpreter(overrides: Partial<Record<'action' | 'catalogMatch' | 'episode' | 'initialAction' | 'playbackPermission', ChoiceAnswer>> = {}) {
   return createCatalogInterpreter({ apiKey: 'test-only', model: 'test-only' }, decisions({
-    action: choice('choose'), catalogMatch: choice('available'), initialAction: choice('none'), episode: choice(mars.id), ...overrides,
+    action: choice('choose'), catalogMatch: choice('available'), playbackPermission: choice('requested'), initialAction: choice('none'), episode: choice(mars.id), ...overrides,
   }));
 }
 
@@ -51,7 +51,8 @@ test('invalid selections and questions without a current episode never start the
   for (const intent of [{ kind: 'select', episodeId: 'not-in-catalog' }, { kind: 'current' }] satisfies CatalogIntent[]) {
     const result = await service([design], async () => intent).resolve('owner', 'A request', 'missing-current', [], signal());
     assert.equal(result.kind, 'clarify'); assert.equal(result.episode, undefined);
-    assert.match(result.message, /Design Fieldwork/);
+    assert.match(result.message, /show, guest, or topic/);
+    assert(!result.message.includes(design.title));
     assert.doesNotMatch(result.message, /we’re listening|undefined/i);
   }
 });
@@ -111,16 +112,16 @@ test('unavailable catalog requests fail gracefully with stored alternatives', as
   assert.doesNotMatch(result.message, /Which show, guest, or topic/i);
 });
 
-test('delegated catalog choice plays a stored episode without requiring a named show', async () => {
+test('delegated catalog choice asks for context without selecting the first episode', async () => {
   let observed: CatalogContext | undefined;
   const catalog = service([design, mars], async (input) => {
     observed = input;
     return { kind: 'recommend' };
   });
   const result = await catalog.resolve('owner', 'Pick whatever you like', undefined, [], signal());
-  assert.equal(result.kind, 'play');
-  assert.equal(result.episode?.id, design.id);
-  assert.equal(result.message, `${design.showTitle}. With ${design.guest}.`);
+  assert.equal(result.kind, 'clarify');
+  assert.equal(result.episode, undefined);
+  assert.match(result.message, /topic/i);
   assert.equal(observed?.episodes.length, 2);
 });
 
@@ -181,7 +182,8 @@ test('the Jev adapter supports delegated repository choice without a named catal
       catalogMatch: choice('unspecified'),
       episode: choice('none'),
     })({ ...context, utterance }, signal());
-    assert.deepEqual(intent, { kind: 'recommend' });
+    assert.equal(intent.kind, 'clarify');
+    assert.deepEqual(intent.kind === 'clarify' && intent.candidateIds, []);
   }
 });
 
@@ -191,13 +193,13 @@ test('the Jev adapter returns alternatives when a named request is unavailable',
     catalogMatch: choice('unavailable'),
     episode: choice('none'),
   })({ ...context, utterance: 'Play Joe Rogan' }, signal());
-  assert.deepEqual(intent, { kind: 'clarify', reason: 'unavailable', candidateIds: [mars.id, design.id] });
+  assert.deepEqual(intent, { kind: 'clarify', reason: 'unavailable', candidateIds: [], fallback: { question: 'interest', candidateIds: [] } });
 });
 
 test('direct show or guest requests are not satisfied by description-only topic mentions', async () => {
   const adEpisode = { ...mars, id: 'ad-load', title: 'Podcast ad load', showTitle: 'Podnews', guest: undefined, description: 'A discussion mentions Joe Rogan while reviewing ad inventory.' };
   const intent = await interpreter({ catalogMatch: choice('unavailable'), episode: choice('none') })({ utterance: 'Play Joe Rogan', episodes: [adEpisode, design], history: [] }, signal());
-  assert.deepEqual(intent, { kind: 'clarify', reason: 'unavailable', candidateIds: [adEpisode.id] });
+  assert.deepEqual(intent, { kind: 'clarify', reason: 'unavailable', candidateIds: [], fallback: { question: 'interest', candidateIds: [] } });
 });
 
 test('topic searches retain the complete eligible catalog for semantic matching', async () => {
@@ -207,7 +209,7 @@ test('topic searches retain the complete eligible catalog for semantic matching'
     const all = questions as Record<string, { criteria: Record<string, string> }>;
     if (!all.episode) return { action: choice('choose'), initialAction: choice('none') } as Record<K, ChoiceAnswer>;
     assert.deepEqual(Object.keys(all.episode.criteria), [product.id, ...unrelated.map((episode) => episode.id), 'none']);
-    return { catalogMatch: choice('available'), episode: choice(product.id) } as Record<K, ChoiceAnswer>;
+    return { catalogMatch: choice('available'), playbackPermission: choice('requested'), episode: choice(product.id) } as Record<K, ChoiceAnswer>;
   };
   const result = await createCatalogInterpreter({ apiKey: 'test-only', model: 'test-only' }, choices)({
     utterance: 'Play something about product',
@@ -228,7 +230,7 @@ test('Jev candidate arguments are generated from the supplied catalog', async ()
     assert(Object.hasOwn(all.episode!.criteria, 'none'));
     assert.equal(all.episode!.criteria[mars.id], 'The episode described in episodes[0].');
     checked = true;
-    return { catalogMatch: choice('available'), episode: choice(design.id) } as Record<K, ChoiceAnswer>;
+    return { catalogMatch: choice('available'), playbackPermission: choice('requested'), episode: choice(design.id) } as Record<K, ChoiceAnswer>;
   };
   const shared = [
     { ...mars, description: 'A conversation about research.' },
@@ -251,7 +253,7 @@ test('trailing transcription noise is interpreted by the model rather than a lex
   const guestEpisode = { ...mars, id: 'guest-episode', guest: 'Kat Wu', title: 'AI-native product work' };
   const result = await createCatalogInterpreter({ apiKey: 'test-only', model: 'test-only' }, decisions({
     action: choice('choose'),
-    catalogMatch: choice('available'),
+    catalogMatch: choice('available'), playbackPermission: choice('requested'),
     initialAction: choice('none'),
     episode: choice(guestEpisode.id),
   }))({
