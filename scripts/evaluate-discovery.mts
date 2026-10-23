@@ -1,5 +1,5 @@
-// Live text-only evaluation against stored catalog metadata. No listening
-// sessions, playback, microphone capture, or database mutations are performed.
+// Live text-only acceptance against the real catalog. No database writes,
+// listening sessions or audio. Measures questions and turns to a real offer.
 import assert from 'node:assert/strict';
 import { backendConfig } from '../backend/config';
 import { createDatabase } from '../backend/database';
@@ -7,46 +7,102 @@ import { Repository } from '../backend/repository';
 import { createCatalogFallback, type CatalogFallbackPlan } from '../backend/catalog-fallback';
 import { createCatalogInterpreter } from '../backend/catalog-interpreter';
 import { CatalogService } from '../backend/catalog-service';
+import { askChoices } from '../src/server/typesafe/client';
 
 const config = backendConfig();
 const pool = createDatabase(config.databaseUrl);
 const episodes = await new Repository(pool, config).catalog().finally(() => pool.end());
-assert(episodes.length > 0, 'Load a real catalog before evaluating discovery');
-const plans: CatalogFallbackPlan[] = [];
-const compose = createCatalogFallback(config.providers.openai);
-const service = new CatalogService({ catalog: async () => episodes, unfinished: async () => undefined, charge: async () => {} },
-  createCatalogInterpreter(config.providers.typesafe, undefined, async (...args) => {
-    const plan = await compose(...args); plans.push(plan); return plan;
-  }));
-const transcript: unknown[] = [];
-let history: string[] = [];
-const turn = async (utterance: string) => {
-  const result = await service.resolve('discovery-eval', utterance, undefined, history.slice(-4), AbortSignal.timeout(30_000));
-  const plan = plans.at(-1);
-  const entry = { utterance, reply: result.message, kind: result.kind, offeredIds: plan?.candidateIds, memory: plan?.discovery, failure: plan?.failure };
-  transcript.push(entry); console.log(JSON.stringify(entry));
-  assert.equal(result.kind, 'clarify', 'Discovery must not auto-play');
-  assert(!result.message.includes('trouble thinking'), `Live composer did not return a validated reply: ${plan?.failure ?? 'unknown'}`);
-  assert((result.message.match(/\?/g) ?? []).length <= 1);
-  history.push(utterance, result.message);
-  return plan!;
-};
-await turn('Play a Lex Fridman interview');
-assert.deepEqual(plans.at(-1)!.candidateIds, [], 'An unavailable request alone must not produce a menu');
-await turn('I do not know what I am looking for. Can you help me figure it out?');
-assert.deepEqual(plans.at(-1)!.candidateIds, [], 'Broad uncertainty needs useful direction, not immediate titles');
-await turn('I have been thinking about how people work together when technology changes so fast.');
-await turn('Not sales or growing a business. I care about the people doing the work.');
-await turn('I would like a concrete interview about that now. What do you have?');
-const offered = [...plans.at(-1)!.candidateIds];
-assert(offered.length > 0, 'Concrete request should produce a catalog-backed option');
-await turn('Before picking, why does that fit what I told you?');
-const changed = await turn('Leave those options aside. I am more curious about actually building AI products.');
-assert(!changed.candidateIds.some((id) => offered.includes(id)), 'A rejected offer must not reappear on the next turn');
-const finalPlan = await turn('Show me a different interview about a product team making AI tools.');
-assert(finalPlan.candidateIds.length > 0);
-assert(!finalPlan.candidateIds.some((id) => offered.includes(id)), 'Rejected options must not be recycled');
-const selected = await service.resolve('discovery-eval', 'Play the first one', undefined, history.slice(-4), AbortSignal.timeout(30_000));
-assert.equal(selected.kind, 'play');
-assert.equal(selected.episode?.id, finalPlan.candidateIds[0]);
-console.log(JSON.stringify({ selection: selected.episode?.id, catalogEntries: episodes.length, turns: transcript.length + 1, scope: 'Live text models and catalog metadata; no audio or sessions' }));
+assert(episodes.length > 0);
+const decisions: unknown[] = [];
+const interpreter = createCatalogInterpreter(config.providers.typesafe, async (state, questions, options) => {
+  const answers = await askChoices(state, questions, options);
+  decisions.push(answers);
+  return answers;
+}, createCatalogFallback(config.providers.openai));
+let totalTurns = 0;
+function dialogue(name: string) {
+  const history: string[] = [];
+  let plan: CatalogFallbackPlan | undefined;
+  const service = new CatalogService({ catalog: async () => episodes, unfinished: async () => undefined, charge: async () => {} }, async (...args) => {
+    const intent = await interpreter(...args);
+    if (intent.kind === 'clarify') plan = intent.fallback;
+    return intent;
+  });
+  return async (utterance: string, expected: 'clarify' | 'play' = 'clarify') => {
+    plan = undefined; decisions.length = 0;
+    const result = await service.resolve(name, utterance, undefined, history.slice(-4), AbortSignal.timeout(40_000));
+    totalTurns++;
+    console.log(JSON.stringify({ scenario: name, utterance, reply: result.message, kind: result.kind, episodeId: result.episode?.id, responseKind: plan?.responseKind, questions: plan?.discovery?.discoveryQuestions, limit: plan?.discovery?.questionLimit, pending: plan?.discovery?.pendingOffers, failure: plan?.failure }));
+    if (result.kind !== expected || plan?.failure) console.log(JSON.stringify({ decisions }));
+    assert.equal(result.kind, expected, `${name}: ${utterance}`);
+    assert.equal(plan?.failure, undefined, `${name}: composer failed`);
+    assert(!result.message.includes('trouble thinking'), result.message);
+    if (plan) {
+      assert((result.message.match(/\?/g) ?? []).length <= 1);
+      assert((plan.discovery?.discoveryQuestions ?? 0) <= (plan.discovery?.questionLimit ?? 2));
+      assert(result.message.split(/\s+/).length <= 90);
+      for (const item of plan.discovery?.pendingOffers ?? []) {
+        assert(episodes.some((episode) => episode.id === item.episodeId));
+        assert((item.label?.length ?? 0) < 110);
+      }
+    }
+    history.push(utterance, result.message);
+    return { result, plan };
+  };
+}
+
+const fast = dialogue('direct request');
+const target = episodes.find((episode) => episode.id === 'lenny-cat-wu') ?? episodes[0]!;
+assert.equal((await fast(`Play ${target.title}`, 'play')).result.episode?.id, target.id);
+
+const open = dialogue('uncertain listener');
+let step = await open('I have no idea what I feel like listening to. Help me choose.');
+assert.equal(step.plan!.responseKind, 'question', 'A cold uncertain listener needs one useful direction question first');
+assert.equal(step.plan!.discovery?.discoveryQuestions, 1);
+for (let count = 1; !(step.plan?.candidateIds.length); count++) {
+  assert(count < 3, 'Open discovery must offer by response three');
+  step = await open(count === 1 ? 'I am still not sure what topic I want.' : 'I cannot narrow it down further.');
+}
+assert.equal(step.plan!.candidateIds.length, 1, 'Uncertainty should get one easy starting option');
+const openId = step.plan!.candidateIds[0];
+assert.equal((await open('Yes, please', 'play')).result.episode?.id, openId);
+
+const missing = dialogue('unavailable request');
+step = await missing('Play the Uncatalogued Sound Archive podcast');
+assert.equal(step.plan!.responseKind, 'question', 'An unknown unavailable show is not enough context for a substitute');
+assert.equal(step.plan!.discovery?.discoveryQuestions, 1);
+if (!step.plan?.candidateIds.length) step = await missing('I care about how people collaborate when technology changes.');
+assert(step.plan!.candidateIds.length > 0, 'Unavailable request must offer by response two');
+assert((step.plan!.discovery?.discoveryQuestions ?? 0) <= 1);
+const previous = step.plan!.candidateIds;
+step = await missing('Leave those options aside. I am interested in actually building AI tools now.');
+assert(step.plan!.candidateIds.length > 0, 'Correction should refine the offer without another interview');
+assert(!step.plan!.candidateIds.some((id) => previous.includes(id)), 'Do not recycle rejected options');
+step = await missing('Do not play yet. Explain why that fits.');
+assert.equal(step.plan!.responseKind, 'answer');
+assert(!step.result.message.includes('?'), 'An explanation must not repeat a play-consent question');
+step = await missing('Give me one option about a team building AI products.');
+assert.equal(step.plan!.candidateIds.length, 1);
+const correctedId = step.plan!.candidateIds[0];
+step = await missing('Not yet. I want to wait before listening.');
+assert.equal(step.plan!.responseKind, 'hold');
+assert(!step.result.message.includes('?'));
+assert.equal(step.plan!.discovery?.discoveryQuestions, 1);
+assert.equal(step.plan!.discovery?.pendingOffers[0]?.episodeId, correctedId);
+assert.equal((await missing('Play that one', 'play')).result.episode?.id, correctedId);
+
+const two = dialogue('two-option consent');
+step = await two('Give me two different episodes about building AI products to choose between.');
+assert.equal(step.plan!.candidateIds.length, 2);
+const secondId = step.plan!.candidateIds[1];
+step = await two('Yes');
+assert.equal(step.plan!.responseKind, 'selection');
+assert.equal(step.plan!.candidateIds[1], secondId);
+assert.equal((await two('The second one', 'play')).result.episode?.id, secondId);
+
+const noFit = dialogue('unsupported constraints');
+step = await noFit('I only want an episode entirely in Icelandic about medieval Icelandic poetry. Do not suggest another topic or language.');
+assert.equal(step.plan!.responseKind, 'no_match');
+assert.equal(step.plan!.candidateIds.length, 0);
+
+console.log(JSON.stringify({ passed: true, catalogEntries: episodes.length, totalTurns, scenarios: 5, scope: 'Live text models and real catalog metadata; no audio or sessions' }));

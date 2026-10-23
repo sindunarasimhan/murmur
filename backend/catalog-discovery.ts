@@ -6,13 +6,24 @@ export type DiscoveryState = {
   unknowns: string[];
   rejectedEpisodeIds: string[];
   offeredEpisodeIds: string[];
-  pendingOffers: { option: number; episodeId: string }[];
+  pendingOffers: { option: number; episodeId: string; label?: string }[];
   lastQuestion: string | null;
+  discoveryQuestions: number;
+  questionLimit: 1 | 2;
 };
 export const emptyDiscovery = (): DiscoveryState => ({
   intent: '', preferences: [], unknowns: [], rejectedEpisodeIds: [],
   offeredEpisodeIds: [], pendingOffers: [], lastQuestion: null,
+  discoveryQuestions: 0, questionLimit: 2,
 });
+
+// The model's dialogue must end with the request being interpreted. Otherwise
+// a previous user turn (for example withholding playback) can look like the
+// latest instruction even though utterance contains a newer request.
+export const catalogDialogue = (history: string[], utterance: string) => [
+  ...history.map((text, index) => ({ role: index % 2 ? 'assistant' : 'user', text })),
+  { role: 'user', text: utterance },
+];
 type Entry = { token: object; touched: number; episodeId?: string; history: string[]; state: DiscoveryState };
 
 export class CatalogDiscoveryMemory {

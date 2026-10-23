@@ -6,6 +6,7 @@ import { createCatalogFallback, createDiscoveryComposer, fallbackResolution, rec
 import { createCatalogInterpreter, type CatalogContext } from './catalog-interpreter';
 import { CatalogService } from './catalog-service';
 import { CatalogDiscoveryMemory, emptyDiscovery } from './catalog-discovery';
+import { catalogLabels } from './catalog-labels';
 import { backendConfig } from './config';
 
 const episodes: PreparedEpisode[] = [
@@ -15,40 +16,33 @@ const episodes: PreparedEpisode[] = [
 ];
 const provider = { ...backendConfig().providers.openai, apiKey: 'test-only' };
 const signal = () => new AbortController().signal;
-const context: CatalogContext = { utterance: 'Help me figure it out', history: [], episodes, allowOffers: true };
+const context: CatalogContext = { utterance: 'Help me figure it out', history: [], episodes };
 const answer = (choice: string): ChoiceAnswer => ({ choice, probabilities: { [choice]: 1 }, confidence: 1 });
 const repository = () => ({ catalog: async () => episodes, unfinished: async () => undefined, charge: async () => {} });
 const memory = () => ({ intent: 'Find something interesting', preferences: [], unknowns: [], rejectedEpisodeIds: [] });
 const draft = (overrides: Partial<DiscoveryDraft> = {}): DiscoveryDraft => ({
   reply: 'We could follow the question of whether life exists elsewhere. That gives us a mystery to explore without choosing an episode yet.',
-  offerBasis: 'none', offers: [], memory: memory(), ...overrides,
+  responseKind: 'hold', question: null, offers: [], memory: memory(), ...overrides,
 });
 const offer = (): DiscoveryDraft => draft({
-  reply: '{{1}} follows the search for life beyond our planet, which connects to your curiosity about what we might discover.',
-  offerBasis: 'context_ready', offers: [{ episodeId: 'missions', evidenceField: 'description' }],
+  reply: '',
+  responseKind: 'offer', offers: [{ episodeId: 'missions', evidenceField: 'description', reason: 'It follows the search for life beyond our planet, a possible starting point for your curiosity.' }],
 });
 
-test('natural discovery has no fixed question category, no premature title and no forced play close', async () => {
-  const plan = await createCatalogFallback(provider, async () => draft())(context, false, signal());
-  assert.equal(plan.message, draft().reply);
-  assert.deepEqual(plan.candidateIds, []);
-  assert.equal(fallbackResolution(episodes, plan).kind, 'clarify');
+test('grounded offers use short stable names and ask for selection without playing', async () => {
   const options = await createCatalogFallback(provider, async () => offer())(context, false, signal());
-  assert(options.message.includes(episodes[2]!.title));
-  assert(!options.message.includes('?'));
-  assert.deepEqual(options.discovery?.pendingOffers, [{ option: 1, episodeId: 'missions' }]);
-  const tooSoon = await createCatalogFallback(provider, async () => offer())({ ...context, allowOffers: false }, true, signal());
-  assert.equal(tooSoon.failure, 'offers_not_ready');
-  assert.deepEqual(tooSoon.candidateIds, []);
-  const plainTopic = await createCatalogFallback(provider, async () => draft({ reply: 'We could explore whether there is life beyond Earth.' }))({ ...context, allowOffers: false }, false, signal());
-  assert.equal(plainTopic.failure, undefined, 'A subject that overlaps a title is still valid conversational language');
+  assert.equal(options.failure, undefined);
+  assert(options.message.includes('Ravi Patel’s episode'));
+  assert(options.message.endsWith('Want to listen?'));
+  assert.deepEqual(options.discovery?.pendingOffers, [{ option: 1, episodeId: 'missions', label: 'Ravi Patel’s episode' }]);
+  assert.equal(fallbackResolution(episodes, options).kind, 'clarify');
   const named = await createCatalogFallback(provider, async () => offerWithNamedReference())(context, false, signal());
   assert.deepEqual(named.candidateIds, ['missions']);
-  assert(named.message.includes(episodes[2]!.title));
+  assert(named.message.includes('Ravi Patel’s episode'));
 });
 
 function offerWithNamedReference(): DiscoveryDraft {
-  return { ...offer(), reply: '[[missions]] connects directly to your interest in the search for life.' };
+  return offer();
 }
 
 test('unknown IDs, unsupported evidence, title bypasses, malformed output and excess questions fail closed', async () => {
@@ -81,10 +75,10 @@ test('a malformed generated draft gets one bounded repair without committing an 
   let calls = 0;
   const plan = await createCatalogFallback(provider, async (input) => {
     calls++;
-    if (calls === 1) return draft({ reply: 'Consider {{1}}.' });
+    if (calls === 1) return draft({ reply: 'Consider [[missions]].' });
     assert.equal((input as { repair: { reason: string } }).repair.reason, 'invalid_option_references');
     return draft();
-  })({ ...context, allowOffers: false }, false, signal());
+  })(context, false, signal());
   assert.equal(calls, 2);
   assert.equal(plan.failure, undefined);
   assert.deepEqual(plan.candidateIds, []);
@@ -97,7 +91,8 @@ test('structured response transport requires a complete response and sends bound
     assert.equal(request.text.format.type, 'json_schema');
     assert.equal(request.text.format.strict, true);
     assert.equal(request.text.format.schema.additionalProperties, false);
-    assert.equal(request.text.format.schema.properties.offers.maxItems, 0, 'Exploration cannot emit a title shortlist');
+    assert.equal(request.text.format.schema.properties.question.type, 'null');
+    assert(!request.text.format.schema.properties.responseKind.enum.includes('question'), 'No question mode after the budget');
     assert(request.max_output_tokens <= 2400);
     return Response.json({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify(draft()) }] }] });
   };
@@ -126,7 +121,8 @@ test('structured memory and full acknowledged conversation survive the client’
     assert.equal(reply.kind, 'clarify');
     history = [...history, utterance, reply.message];
   }
-  assert.equal(seen[5]!.history.length, 10);
+  assert.equal(seen[5]!.history.length, 11);
+  assert.deepEqual(seen[5]!.history.at(-1), { role: 'user', text: 'What else?' });
   assert.deepEqual(seen[5]!.discovery?.preferences, [{ value: 'No business advice', basis: 'explicit' }]);
   assert.equal((seen[5]!.history[0] as unknown as { text: string }).text, 'No business advice');
   await service.resolve('b', 'Help me', undefined, [], signal());
@@ -147,7 +143,7 @@ test('rejections and corrections replace preferences, and direct selection still
   });
   const semantic: typeof askChoices = async <K extends string>() => ({
     action: answer(step < 2 ? 'recommend' : 'choose'), initialAction: answer('none'),
-    offerReadiness: answer('offer'),
+    offerReply: answer('other'),
     offerFeedback: answer(step === 1 ? 'reject_all' : 'keep'),
     catalogMatch: answer('available'), episode: answer('design'), playbackPermission: answer(step === 2 ? 'discovery' : 'requested'),
   }) as Record<K, ChoiceAnswer>;
@@ -213,7 +209,12 @@ test('ordinal order comes from structured offers, with a conservative compatibil
 test('live multi-turn discovery helps uncertainty, respects corrections and keeps selection separate', { skip: process.env.MURMUR_LIVE_FALLBACK !== '1' }, async () => {
   const config = backendConfig();
   const plans: { candidates: string[]; state: unknown; failure?: string }[] = [];
-  const plan = createCatalogFallback(config.providers.openai);
+  const generate = createDiscoveryComposer(config.providers.openai);
+  const plan = createCatalogFallback(config.providers.openai, async (input, abort) => {
+    const draft = await generate(input, abort);
+    console.log(JSON.stringify({ draft, responseMode: (input as CatalogContext).discoveryResponse }));
+    return draft;
+  });
   const service = new CatalogService(repository(), createCatalogInterpreter(config.providers.typesafe, undefined, async (...args) => {
     const result = await plan(...args); plans.push({ candidates: result.candidateIds, state: result.discovery, failure: result.failure }); return result;
   }));
@@ -230,7 +231,7 @@ test('live multi-turn discovery helps uncertainty, respects corrections and keep
   await turn('Play the Planetary Conversations podcast');
   assert.deepEqual(plans.at(-1)!.candidates, []);
   await turn('I do not know what I like about it. Help me figure out something worth listening to.');
-  assert.deepEqual(plans.at(-1)!.candidates, []);
+  assert(plans.at(-1)!.candidates.length > 0, 'Unavailable path must offer after at most one question, even if the listener remains unsure');
   await turn('I have spent all day on work. Something that makes the world feel bigger sounds good.');
   await turn('I am curious about whether life exists elsewhere. Tell me what you have on that.');
   assert(plans.at(-1)!.candidates.includes('missions'));
@@ -241,4 +242,123 @@ test('live multi-turn discovery helps uncertainty, respects corrections and keep
   await turn('An interview about making local services more inclusive would work. What is available?');
   assert.deepEqual(plans.at(-1)!.candidates, ['design']);
   assert.equal((await turn('Play that one', 'play')).episode?.id, 'design');
+});
+
+test('server budget survives the client window and cannot be reset by a model draft or correction', async () => {
+  const seen: number[] = [];
+  const compose = createCatalogFallback(provider, async (input) => {
+    const remaining = (input as { discoveryQuestionsRemaining: number }).discoveryQuestionsRemaining;
+    seen.push(remaining);
+    return remaining ? draft({ responseKind: 'question', reply: '', question: remaining === 2 ? 'What are you curious about today?' : 'Would exploring space be interesting?' }) : offer();
+  });
+  const service = new CatalogService(repository(), async (input, abort) => ({ kind: 'clarify', candidateIds: [], fallback: await compose(input, false, abort) }));
+  const history: string[] = [];
+  for (const utterance of ['Help me choose', 'Not sure', 'Still unsure', 'Actually something different', 'Tell me more']) {
+    const result = await service.resolve('budget', utterance, undefined, history.slice(-4), signal());
+    assert.equal(result.kind, 'clarify');
+    history.push(utterance, result.message);
+  }
+  assert.deepEqual(seen, [2, 1, 0, 0, 0]);
+  const exhausted = { ...context, discovery: { ...emptyDiscovery(), discoveryQuestions: 2 } };
+  const result = await createCatalogFallback(provider, async () => draft({ responseKind: 'question', question: 'One more preference?' }))(exhausted, false, signal());
+  assert.equal(result.failure, 'question_budget_exhausted');
+  assert.equal(result.discovery?.discoveryQuestions, 2);
+});
+
+test('unavailable request allows only one question and context can skip it entirely', async () => {
+  const inputs: number[] = [];
+  const compose = createCatalogFallback(provider, async (input) => {
+    const remaining = (input as { discoveryQuestionsRemaining: number }).discoveryQuestionsRemaining;
+    inputs.push(remaining);
+    return remaining ? draft({ responseKind: 'question', reply: 'That is unavailable.', question: 'What interested you in it?' }) : offer();
+  });
+  const first = await compose(context, true, signal());
+  assert.equal(first.discovery?.questionLimit, 1);
+  const second = await compose({ ...context, discovery: first.discovery }, false, signal());
+  assert.deepEqual(inputs, [1, 0]);
+  assert.deepEqual(second.candidateIds, ['missions']);
+  assert.equal(second.discovery?.discoveryQuestions, 1);
+  const ready = await createCatalogFallback(provider, async () => offer())(context, true, signal());
+  assert.equal(ready.discovery?.discoveryQuestions, 0);
+  assert.deepEqual(ready.candidateIds, ['missions']);
+});
+
+test('no supported fit remains honest after the question budget, and rejected drafts do not consume questions', async () => {
+  const noFit = await createCatalogFallback(provider, async () => draft({ responseKind: 'no_match', reply: 'I do not have a match for that subject.' }))({ ...context, discovery: { ...emptyDiscovery(), discoveryQuestions: 2 } }, false, signal());
+  assert.equal(noFit.failure, undefined);
+  assert.deepEqual(noFit.candidateIds, []);
+  assert.equal(fallbackResolution(episodes, noFit).kind, 'clarify');
+  let calls = 0;
+  const repaired = await createCatalogFallback(provider, async () => ++calls === 1 ? draft({ responseKind: 'question', question: 'What topic? What style?' }) : draft({ responseKind: 'question', reply: '', question: 'What has caught your attention lately?' }))(context, false, signal());
+  assert.equal(repaired.discovery?.discoveryQuestions, 1);
+  assert.equal(calls, 2);
+});
+
+test('short labels are grounded, distinct and map to the spoken order after a follow-up', async () => {
+  const long = { ...episodes[0]!, title: 'A very long episode title that nobody should have to listen to in full before choosing a podcast | Maya Chen' };
+  const catalog = [long, { ...long, id: 'second', title: 'Another journey through the outer planets | Maya Chen' }, ...episodes.slice(1)];
+  const labels = catalogLabels(catalog);
+  assert.equal(labels.get('space'), 'Maya Chen’s episode');
+  assert.notEqual(labels.get('space'), labels.get('second'));
+  assert([...labels.values()].every((label) => label.length < 110));
+  const two = draft({ responseKind: 'offer', reply: '', offers: [offer().offers[0]!, { episodeId: 'space', evidenceField: 'description', reason: 'It follows planetary navigation.' }] });
+  const first = await createCatalogFallback(provider, async () => two)({ ...context, maxOffers: 2 }, false, signal());
+  assert(first.message.endsWith('Which would you like to hear?'));
+  assert.deepEqual(first.discovery?.pendingOffers.map((o) => o.episodeId), ['missions', 'space']);
+  const next = await createCatalogFallback(provider, async () => ({ ...two, offers: [], responseKind: 'answer', reply: '[[space]] is about navigation, while [[missions]] focuses on life elsewhere.' }))({ ...context, discovery: first.discovery }, false, signal());
+  assert.equal(next.failure, undefined);
+  assert.deepEqual(next.discovery?.pendingOffers.map((o) => o.episodeId), ['space', 'missions']);
+  assert.equal(next.discovery?.pendingOffers[1]?.label, first.discovery?.pendingOffers[0]?.label);
+  assert.deepEqual(recentCatalogOffers({ ...context, history: ['Suggest one', first.message] }).map((o) => o.episodeId), ['missions', 'space']);
+});
+
+test('a clear authorized first request bypasses discovery and ambiguous two-option acceptance asks only which', async () => {
+  let mode = 'play'; let fallbackCalls = 0;
+  const semantic: typeof askChoices = async <K extends string>() => ({
+    action: answer(mode === 'play' ? 'choose' : 'recommend'), initialAction: answer('none'),
+    catalogMatch: answer('available'), episode: answer('missions'), playbackPermission: answer('requested'),
+    offerReply: answer('ambiguous_acceptance'), offerFeedback: answer('keep'),
+  }) as Record<K, ChoiceAnswer>;
+  const interpret = createCatalogInterpreter({ apiKey: 'test', model: 'test' }, semantic, async () => { fallbackCalls++; throw new Error('Should not compose'); });
+  assert.deepEqual(await interpret({ ...context, utterance: 'Play Science Notebook' }, signal()), { kind: 'select', episodeId: 'missions' });
+  mode = 'ambiguous';
+  const discovery = { ...emptyDiscovery(), discoveryQuestions: 2, pendingOffers: [{ option: 1, episodeId: 'missions', label: 'Ravi Patel’s episode' }, { option: 2, episodeId: 'space', label: 'Maya Chen’s episode' }] };
+  const result = await interpret({ ...context, utterance: 'Yes', discovery }, signal());
+  assert.equal(result.kind, 'clarify');
+  if (result.kind === 'clarify') {
+    assert.match(result.fallback!.message, /^Which would you like:/);
+    assert.deepEqual(result.fallback!.discovery, discovery);
+    assert.equal(result.fallback!.responseKind, 'selection');
+  }
+  assert.equal(fallbackCalls, 0);
+});
+
+test('even repeated semantic requests to ask cannot exceed the persisted budget', async () => {
+  const modes: string[] = [];
+  const semantic: typeof askChoices = async <K extends string>() => ({
+    action: answer('recommend'), initialAction: answer('none'), discoveryResponse: answer('question'),
+    offerReply: answer('other'), offerFeedback: answer('keep'), offerCount: answer('one'),
+  }) as Record<K, ChoiceAnswer>;
+  const composer = createCatalogFallback(provider, async (input) => {
+    const state = input as CatalogContext;
+    modes.push(state.discoveryResponse!);
+    return state.discoveryResponse === 'question' ? draft({ responseKind: 'question', reply: '', question: modes.length === 1 ? 'What interests you today?' : 'Would a science conversation appeal?' }) : offer();
+  });
+  const service = new CatalogService(repository(), createCatalogInterpreter({ apiKey: 'test', model: 'test' }, semantic, composer));
+  const history: string[] = [];
+  for (const utterance of ['Help choose', 'Unsure', 'Still unsure']) {
+    const reply = await service.resolve('bounded-router', utterance, undefined, history.slice(-4), signal());
+    history.push(utterance, reply.message);
+  }
+  assert.deepEqual(modes, ['question', 'question', 'offer']);
+  assert(history.at(-1)!.includes('Ravi Patel’s episode'));
+});
+
+test('an explanation can reference an existing offer without proposing it again or asking consent', async () => {
+  const previous = (await createCatalogFallback(provider, async () => offer())(context, false, signal())).discovery;
+  const response = await createCatalogFallback(provider, async () => draft({ responseKind: 'answer', reply: '[[missions]] covers planetary exploration and the search for life.' }))({ ...context, discovery: previous, discoveryResponse: 'answer' }, false, signal());
+  assert.equal(response.failure, undefined);
+  assert(!response.message.includes('?'));
+  assert.deepEqual(response.candidateIds, ['missions']);
+  assert.deepEqual(response.discovery?.pendingOffers, previous?.pendingOffers);
 });
