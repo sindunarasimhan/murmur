@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { PreparedEpisode } from '../shared/listening';
 import type { askChoices, ChoiceAnswer } from '../src/server/typesafe/client';
 import { createCatalogInterpreter, type CatalogContext, type CatalogIntent, type CatalogInterpreter } from './catalog-interpreter';
+import { safeCatalogFallback } from './catalog-fallback';
 import { CatalogService } from './catalog-service';
 
 const mars: PreparedEpisode = {
@@ -193,13 +194,13 @@ test('the Jev adapter returns alternatives when a named request is unavailable',
     catalogMatch: choice('unavailable'),
     episode: choice('none'),
   })({ ...context, utterance: 'Play Joe Rogan' }, signal());
-  assert.deepEqual(intent, { kind: 'clarify', reason: 'unavailable', candidateIds: [], fallback: { question: 'interest', candidateIds: [] } });
+  assert.deepEqual(intent, { kind: 'clarify', reason: 'unavailable', candidateIds: [], fallback: safeCatalogFallback({ ...context, utterance: 'Play Joe Rogan' }, true) });
 });
 
 test('direct show or guest requests are not satisfied by description-only topic mentions', async () => {
   const adEpisode = { ...mars, id: 'ad-load', title: 'Podcast ad load', showTitle: 'Podnews', guest: undefined, description: 'A discussion mentions Joe Rogan while reviewing ad inventory.' };
   const intent = await interpreter({ catalogMatch: choice('unavailable'), episode: choice('none') })({ utterance: 'Play Joe Rogan', episodes: [adEpisode, design], history: [] }, signal());
-  assert.deepEqual(intent, { kind: 'clarify', reason: 'unavailable', candidateIds: [], fallback: { question: 'interest', candidateIds: [] } });
+  assert.deepEqual(intent, { kind: 'clarify', reason: 'unavailable', candidateIds: [], fallback: safeCatalogFallback({ ...context, utterance: 'Play Joe Rogan' }, true) });
 });
 
 test('topic searches retain the complete eligible catalog for semantic matching', async () => {

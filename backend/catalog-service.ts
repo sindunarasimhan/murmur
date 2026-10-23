@@ -3,6 +3,7 @@ import type { CatalogInterpreter } from './catalog-interpreter';
 import type { Repository } from './repository';
 import { ServiceError } from './errors';
 import { fallbackResolution } from './catalog-fallback';
+import { CatalogDiscoveryMemory, type DiscoveryState } from './catalog-discovery';
 
 type CatalogRepository = Pick<Repository, 'catalog' | 'unfinished' | 'charge'>;
 
@@ -31,10 +32,14 @@ function clarification(episodes: PreparedEpisode[], candidateIds: string[] = [],
 }
 
 export class CatalogService {
-  constructor(private readonly repository: CatalogRepository, private readonly interpret: CatalogInterpreter) {}
+  constructor(private readonly repository: CatalogRepository, private readonly interpret: CatalogInterpreter,
+    private readonly discovery = new CatalogDiscoveryMemory()) {}
+
+  forget(owner: string) { this.discovery.forget(owner); }
 
   async resolve(owner: string, utterance: string, currentEpisodeId: string | undefined, history: string[], signal: AbortSignal): Promise<CatalogResolution> {
     signal.throwIfAborted();
+    const turn = this.discovery.begin(owner, currentEpisodeId, history);
     const episodes = await this.repository.catalog();
     if (!episodes.length) {
       throw new ServiceError(503, 'catalog_preparing', 'The podcast catalog is being prepared. Please try again shortly.');
@@ -44,36 +49,47 @@ export class CatalogService {
     const intent = await this.interpret({
       utterance,
       currentEpisodeId: current?.id,
-      history,
+      history: turn.history,
+      discovery: turn.state,
       episodes: episodes.map(({ id, title, showTitle, guest, description, durationSeconds }) => ({ id, title, showTitle, guest, description, durationSeconds })),
     }, signal);
-    signal.throwIfAborted();
+    turn.assertCurrent(signal);
+    const finish = (result: CatalogResolution, state: DiscoveryState = turn.state): CatalogResolution => {
+      if (result.kind === 'clarify') turn.commit(utterance, result.message, state, signal);
+      else turn.clear(signal);
+      return result;
+    };
 
     switch (intent.kind) {
       case 'select': {
         const selected = episodes.find((episode) => episode.id === intent.episodeId);
-        return selected ? play(selected, intent.initialAction) : clarification(episodes);
+        return finish(selected ? play(selected, intent.initialAction) : clarification(episodes));
       }
       case 'recommend':
-        return fallbackResolution(episodes, { question: 'topic', candidateIds: [] });
+        return finish(clarification(episodes));
       case 'resume': {
-        if (current) return { kind: 'current', message: '' };
+        if (current) return finish({ kind: 'current', message: '' });
         const unfinished = await this.repository.unfinished(owner);
         const selected = episodes.find((episode) => episode.id === unfinished?.id);
-        if (selected) return play(selected);
-        return clarification(episodes);
+        if (selected) return finish(play(selected));
+        return finish(clarification(episodes));
       }
       case 'current':
-        return current ? { kind: 'current', message: '' } : clarification(episodes);
+        return finish(current ? { kind: 'current', message: '' } : clarification(episodes));
       case 'stop':
-        return { kind: 'stop', message: 'Microphone off. See you soon.' };
+        return finish({ kind: 'stop', message: 'Microphone off. See you soon.' });
       case 'home':
-        return { kind: 'home', message: 'Back home. What would you like to hear?' };
+        return finish({ kind: 'home', message: 'Back home. What would you like to hear?' });
       case 'cancel':
-        return { kind: 'cancel', message: '' };
+        return finish({ kind: 'cancel', message: '' });
       case 'clarify':
-        if (intent.fallback) return fallbackResolution(episodes, intent.fallback, intent.reason === 'unavailable');
-        return clarification(episodes, intent.candidateIds, current, intent.reason);
+        if (intent.fallback) return finish(fallbackResolution(episodes, intent.fallback), intent.fallback.discovery);
+        return finish(clarification(episodes, intent.candidateIds, current, intent.reason), {
+          ...turn.state,
+          pendingOffers: intent.candidateIds.map((episodeId, index) => ({ option: index + 1, episodeId }))
+            .filter(({ episodeId }) => episodes.some((episode) => episode.id === episodeId)),
+          offeredEpisodeIds: [...new Set([...turn.state.offeredEpisodeIds, ...intent.candidateIds])].slice(-100),
+        });
     }
   }
 }

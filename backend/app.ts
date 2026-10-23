@@ -18,6 +18,7 @@ import { ContinuousVoiceGateway } from './continuous-voice';
 import { CatalogService } from './catalog-service';
 import { createCatalogInterpreter, type CatalogInterpreter } from './catalog-interpreter';
 import { createCatalogInvitation, type CatalogInvitation } from './catalog-invitation';
+import { createCatalogFallback } from './catalog-fallback';
 
 function bearer(request: FastifyRequest) {
   const authorization = request.headers.authorization;
@@ -32,7 +33,7 @@ export async function createApp(options: { config: BackendConfig; pool: Pool; ob
   const listening = new ListeningService(repository, options.intelligence ?? createIntelligence(config));
   const voice = new VoiceGateway(repository, config);
   const continuousVoice = new ContinuousVoiceGateway(repository, config);
-  const catalog = new CatalogService(repository, options.catalogInterpreter ?? createCatalogInterpreter(config.providers.typesafe));
+  const catalog = new CatalogService(repository, options.catalogInterpreter ?? createCatalogInterpreter(config.providers.typesafe, undefined, createCatalogFallback(config.providers.openai)));
   const invitation = options.invitation ?? createCatalogInvitation(config.providers.openai);
   const app = Fastify({ logger: false, bodyLimit: 16 * 1024, requestTimeout: 30_000 });
   await app.register(websocket, { options: { maxPayload: 128 * 1024 } });
@@ -64,6 +65,7 @@ export async function createApp(options: { config: BackendConfig; pool: Pool; ob
   });
   app.delete('/v2/identity', async (request, reply) => {
     const id = await owner(request);
+    catalog.forget(id);
     continuousVoice.cancel(id);
     const sessions = await pool.query('SELECT id FROM listening_sessions WHERE owner_id=$1', [id]);
     for (const session of sessions.rows) { listening.cancel(session.id); voice.cancel(session.id); }

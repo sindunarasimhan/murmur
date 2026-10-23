@@ -29,7 +29,8 @@
     "eval:listening": "node --env-file-if-exists=.env.local --import tsx scripts/evaluate-listening.mts",
     "eval:detail": "node --env-file-if-exists=.env.local --import tsx scripts/evaluate-detail-voice.mts",
     "smoke:listening": "node --import tsx scripts/smoke-listening.mts",
-    "listening:dev": "./script/build_and_run.sh"
+    "listening:dev": "./script/build_and_run.sh",
+    "eval:discovery": "node --env-file-if-exists=.env.local --import tsx scripts/evaluate-discovery.mts"
   },
   "dependencies": {
     "@expo-google-fonts/manrope": "^0.4.2",
