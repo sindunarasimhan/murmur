@@ -7,6 +7,11 @@ const short = (text: string, words = 9, limit = 64) => {
   return parts.join(' ').slice(0, limit);
 };
 
+export function delegatedAnnouncement(episode: Entry): string {
+  const subject = short(episode.title.split(/\s+[|—–]\s+|:\s+/)[0]!, 12, 90);
+  return `I’ll play ${episode.guest ? `${episode.guest}’s episode: ` : ''}${subject}.`;
+}
+
 // Labels are literal metadata excerpts, never model-invented episode titles.
 // Retain the spoken label with its ID in pendingOffers for subsequent turns.
 export function catalogLabels(episodes: Entry[]): Map<string, string> {

@@ -104,8 +104,9 @@ export class ContinuousVoiceGateway {
         const markReady = () => {
           if (closed || socket.readyState !== WebSocket.OPEN) return stop();
           if (ready) return;
-          ready = true; socket.send(JSON.stringify({ type: 'ready', supportsAudioClear: true, turnDetection: semantic ? 'semantic' : 'client' }));
-          diagnostic('ready', { semantic });
+          ready = true; socket.send(JSON.stringify({ type: 'ready', supportsAudioClear: true, turnDetection: semantic ? 'semantic' : 'client',
+            ...(semantic ? { eagerness: 'low', transcriptionModel: this.config.semanticVoiceModel } : {}) }));
+          diagnostic('ready', { semantic, ...(semantic ? { eagerness: 'low', transcriptionModel: this.config.semanticVoiceModel } : {}) });
           // One quota unit per minute; a long wake-word stream cannot evade limits.
           chargeTimer = setInterval(() => {
             if (closed || charging) return; charging = true;
@@ -129,6 +130,9 @@ export class ContinuousVoiceGateway {
             if (event.type === 'conversation.item.input_audio_transcription.completed') {
               diagnostic('transcript-final', { characters: typeof event.transcript === 'string' ? event.transcript.length : 0,
                 wake: typeof event.transcript === 'string' && /\bhey[\s,.!?]+mur\s*mur\b/i.test(event.transcript) });
+            }
+            if (event.type === 'input_audio_buffer.speech_started' || event.type === 'input_audio_buffer.speech_stopped') {
+              diagnostic(event.type, { receivedAt: Date.now(), audioOffsetMs: event.audio_start_ms ?? event.audio_end_ms ?? -1 });
             }
             if (['input_audio_buffer.speech_started', 'input_audio_buffer.speech_stopped', 'input_audio_buffer.committed', 'input_audio_buffer.cleared', 'conversation.item.input_audio_transcription.delta', 'conversation.item.input_audio_transcription.completed'].includes(event.type)) {
               socket.send(JSON.stringify({ type: event.type, item_id: event.item_id, delta: event.delta, transcript: event.transcript }));

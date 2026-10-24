@@ -24,6 +24,7 @@ test('live semantic gateway waits through hesitation and finishes without a clie
     assert.equal(ticket.statusCode, 200);
     const finals: string[] = [];
     const events: string[] = [];
+    const onsetTimes: number[] = [];
     let failure: Error | undefined;
     socket = new WebSocket(address.replace('http:', 'ws:') + '/v2/live-voice', ['murmur-ticket.' + ticket.json().token, 'murmur-semantic-v1']);
     const ready = new Promise<void>((resolve, reject) => {
@@ -31,9 +32,11 @@ test('live semantic gateway waits through hesitation and finishes without a clie
       socket!.on('message', (raw) => {
         const event = JSON.parse(raw.toString());
         events.push(event.type);
+        if (event.type === 'input_audio_buffer.speech_started') onsetTimes.push(Date.now());
         if (event.type === 'error') { failure = new Error(event.message); reject(failure); }
         if (event.type === 'ready') {
           if (event.turnDetection !== 'semantic') reject(new Error('Semantic turn detection was not negotiated'));
+          else if (event.eagerness !== 'low' || event.transcriptionModel !== config.semanticVoiceModel) reject(new Error('The acknowledged voice configuration is incorrect'));
           else resolve();
         }
         if (event.type === 'conversation.item.input_audio_transcription.completed') finals.push(event.transcript);
@@ -59,7 +62,13 @@ test('live semantic gateway waits through hesitation and finishes without a clie
         await sleep(100);
       }
     };
+    await stream(Buffer.alloc(48_000 * 3));
+    assert.equal(onsetTimes.length, 0, 'Digital silence must not produce speech onset');
+    const began = Date.now();
     await stream(opening);
+    assert(onsetTimes.length >= 1, 'Speech onset must arrive before the user finishes the hesitant request');
+    assert(onsetTimes[0]! - began < 3000, 'Onset must not wait for semantic end-of-turn');
+    console.info('Speech onset latency ms:', onsetTimes[0]! - began);
     await stream(Buffer.alloc(48_000 * 1.5));
     assert.equal(finals.length, 0, 'A hesitant unfinished request was committed before its continuation');
     await stream(continuation);

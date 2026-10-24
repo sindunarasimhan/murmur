@@ -4,6 +4,7 @@ import type { Repository } from './repository';
 import { ServiceError } from './errors';
 import { fallbackResolution } from './catalog-fallback';
 import { CatalogDiscoveryMemory, type DiscoveryState } from './catalog-discovery';
+import { delegatedAnnouncement } from './catalog-labels';
 
 type CatalogRepository = Pick<Repository, 'catalog' | 'unfinished' | 'charge'>;
 
@@ -63,7 +64,9 @@ export class CatalogService {
     switch (intent.kind) {
       case 'select': {
         const selected = episodes.find((episode) => episode.id === intent.episodeId);
-        return finish(selected ? play(selected, intent.initialAction) : clarification(episodes));
+        const result = selected ? play(selected, intent.initialAction) : clarification(episodes);
+        if (selected && intent.delegated) result.message = delegatedAnnouncement(selected);
+        return finish(result);
       }
       case 'recommend':
         return finish(clarification(episodes));
