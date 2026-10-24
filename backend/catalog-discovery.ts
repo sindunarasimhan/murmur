@@ -53,6 +53,7 @@ export class CatalogDiscoveryMemory {
       if (this.entries.get(owner)?.token !== entry.token) throw new DOMException('Superseded catalog request', 'AbortError');
     };
     return {
+      memory: undefined,
       state: structuredClone(entry.state), history: [...entry.history], assertCurrent,
       commit: (utterance: string, message: string, state: DiscoveryState, signal: AbortSignal) => {
         assertCurrent(signal);

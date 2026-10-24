@@ -19,6 +19,8 @@ import { CatalogService } from './catalog-service';
 import { createCatalogInterpreter, type CatalogInterpreter } from './catalog-interpreter';
 import { createCatalogInvitation, type CatalogInvitation } from './catalog-invitation';
 import { createCatalogFallback } from './catalog-fallback';
+import { ConversationContexts, createContextCompactor, type ContextCompactor } from './conversation-context';
+import { CatalogContexts } from './catalog-context';
 
 function bearer(request: FastifyRequest) {
   const authorization = request.headers.authorization;
@@ -27,13 +29,14 @@ function bearer(request: FastifyRequest) {
 }
 const sessionId = (request: FastifyRequest) => z.uuid().parse((request.params as { id: string }).id);
 const episodeIdSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,127}$/);
-export async function createApp(options: { config: BackendConfig; pool: Pool; objects: ObjectStore; intelligence?: Intelligence; catalogInterpreter?: CatalogInterpreter; invitation?: CatalogInvitation; speech?: typeof synthesizeAudio }) {
+export async function createApp(options: { config: BackendConfig; pool: Pool; objects: ObjectStore; intelligence?: Intelligence; catalogInterpreter?: CatalogInterpreter; invitation?: CatalogInvitation; speech?: typeof synthesizeAudio; contextCompactor?: ContextCompactor }) {
   const { config, pool, objects } = options;
   const repository = new Repository(pool, config);
-  const listening = new ListeningService(repository, options.intelligence ?? createIntelligence(config));
+  const contexts = new ConversationContexts(options.contextCompactor ?? createContextCompactor(config.providers.openai));
+  const listening = new ListeningService(repository, options.intelligence ?? createIntelligence(config), contexts);
   const voice = new VoiceGateway(repository, config);
   const continuousVoice = new ContinuousVoiceGateway(repository, config);
-  const catalog = new CatalogService(repository, options.catalogInterpreter ?? createCatalogInterpreter(config.providers.typesafe, undefined, createCatalogFallback(config.providers.openai)));
+  const catalog = new CatalogService(repository, options.catalogInterpreter ?? createCatalogInterpreter(config.providers.typesafe, undefined, createCatalogFallback(config.providers.openai)), undefined, new CatalogContexts(pool, contexts));
   const invitation = options.invitation ?? createCatalogInvitation(config.providers.openai);
   const app = Fastify({ logger: false, bodyLimit: 16 * 1024, requestTimeout: 30_000 });
   await app.register(websocket, { options: { maxPayload: 128 * 1024 } });
@@ -86,11 +89,12 @@ export async function createApp(options: { config: BackendConfig; pool: Pool; ob
   });
   app.get('/v2/catalog/:episodeId', (request) => repository.episode(episodeIdSchema.parse((request.params as { episodeId: string }).episodeId)));
   app.post('/v2/catalog/resolve', async (request, reply) => {
-    const input = z.object({ utterance: z.string().trim().min(1).max(1000), currentEpisodeId: z.string().optional(), history: z.array(z.string().max(2000)).max(4).default([]) }).strict().parse(request.body);
+    const input = z.object({ utterance: z.string().trim().min(1).max(1000), currentEpisodeId: z.string().optional(), conversationId: z.uuid().optional(),
+      history: z.array(z.string().max(2000)).max(100).default([]).refine((items) => items.length % 2 === 0 && items.join('').length <= 6000) }).strict().parse(request.body);
     const controller = new AbortController();
     const disconnect = () => { if (!reply.raw.writableEnded) controller.abort(); };
     reply.raw.on('close', disconnect);
-    try { return await catalog.resolve(await owner(request), input.utterance, input.currentEpisodeId, input.history, controller.signal); }
+    try { return await catalog.resolve(await owner(request), input.utterance, input.currentEpisodeId, input.history, controller.signal, input.conversationId); }
     finally { reply.raw.off('close', disconnect); }
   });
   app.post('/v2/catalog/invite', async (request, reply) => {

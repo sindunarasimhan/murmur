@@ -4,10 +4,11 @@ import { playbackAction, type Intelligence } from './intelligence';
 import { ServiceError } from './errors';
 import { adDestination } from '../shared/ad-plan';
 import { randomUUID } from 'node:crypto';
+import { ConversationContexts, emptyContext } from './conversation-context';
 
 export class ListeningService {
   private active = new Map<string, AbortController>();
-  constructor(private readonly repository: Repository, private readonly intelligence: Intelligence) {}
+  constructor(private readonly repository: Repository, private readonly intelligence: Intelligence, private readonly contexts?: ConversationContexts) {}
   cancel(sessionId: string) { this.active.get(sessionId)?.abort(); }
   close() { for (const controller of this.active.values()) controller.abort(); }
   async turn(owner: string, sessionId: string, input: TurnRequest, callerSignal?: AbortSignal): Promise<TurnResult> {
@@ -23,10 +24,18 @@ export class ListeningService {
     const { session } = reserved;
     try {
       controller.signal.throwIfAborted();
+      let context = this.contexts ? await this.repository.conversationContext(session) : undefined;
+      if (this.contexts && !context) {
+        context = emptyContext();
+        for await (const exchange of this.repository.conversationArchive(session)) context = await this.contexts.append(context, exchange, controller.signal);
+      }
+      const rememberedIds = context ? [...context.memory.evidenceIds, ...context.recent.flatMap((turn) => turn.evidenceIds ?? [])] : [];
       const [episode, candidates, history] = await Promise.all([
-        this.repository.episode(session.episodeId), this.repository.evidence(session, input.utterance), this.repository.history(sessionId),
+        this.repository.episode(session.episodeId), this.repository.evidence(session, input.utterance, rememberedIds),
+        context ? Promise.resolve(context.recent) : this.repository.history(sessionId),
       ]);
-      const decision = await this.intelligence.decide({ utterance: input.utterance, session, evidence: candidates, history }, controller.signal);
+      const memory = context?.memory;
+      const decision = await this.intelligence.decide({ utterance: input.utterance, session, evidence: candidates, history, memory }, controller.signal);
       controller.signal.throwIfAborted();
       let action = playbackAction(decision, session, episode.durationSeconds);
       let adResult: Awaited<ReturnType<Repository['currentAd']>> | undefined;
@@ -70,11 +79,13 @@ export class ListeningService {
         else {
           // Include nearby retrieved passages to preserve qualifying context.
           if (evidence.length) evidence = [evidence[0]!, ...candidates.filter((item) => item.id !== decision.passageId).slice(0, 2)];
-          answer = await this.intelligence.answer({ utterance: input.utterance, decision, episode, session, evidence, history }, controller.signal);
+          answer = await this.intelligence.answer({ utterance: input.utterance, decision, episode, session, evidence, history, memory }, controller.signal);
         }
       }
       controller.signal.throwIfAborted();
-      return await this.repository.completeTurn(owner, session, input.requestId, { answer, evidence, action, decision: decision.source, followUp: decision.kind === 'skip-intro' ? introResult?.kind === 'unverified' : decision.kind !== 'skip-ad' || adResult?.kind === 'unverified' });
+      if (this.contexts && context && answer) context = await this.contexts.append(context, { question: input.utterance, answer, evidenceIds: evidence.map((item) => item.id) }, controller.signal);
+      controller.signal.throwIfAborted();
+      return await this.repository.completeTurn(owner, session, input.requestId, { answer, evidence, action, decision: decision.source, followUp: decision.kind === 'skip-intro' ? introResult?.kind === 'unverified' : decision.kind !== 'skip-ad' || adResult?.kind === 'unverified' }, context);
     } catch (error) {
       await this.repository.failTurn(session, input.requestId, controller.signal.aborted ? 'cancelled' : 'provider_error');
       if (controller.signal.aborted) throw new ServiceError(409, 'turn_cancelled', 'That request was stopped. Your place is saved.');

@@ -6,6 +6,7 @@ import { ServiceError, missing, stale } from './errors';
 import { recordingAdPlan, resolvePlannedAd, type AdResolution } from './ad-policy';
 import { validatedAdPlan, type AdPlan } from '../shared/ad-plan';
 import { resolveIntro, type IntroResolution } from './intro-policy';
+import type { ConversationContext, ContextExchange } from './conversation-context';
 
 const sessionColumns = `id, episode_id AS "episodeId", audio_version AS "audioVersion", revision,
   position_seconds AS "positionSeconds", bookmark_seconds AS "bookmarkSeconds", phase,
@@ -90,6 +91,7 @@ export class Repository {
       SELECT $1,$2,id,audio_version FROM episodes WHERE id=$3 AND status='ready'
       ON CONFLICT(owner_id,episode_id) DO UPDATE SET updated_at=now(),
         ad_skipping=false,active_ad_plan=NULL,
+        conversation_context=CASE WHEN listening_sessions.audio_version=EXCLUDED.audio_version THEN listening_sessions.conversation_context ELSE NULL END,
         audio_version=EXCLUDED.audio_version,
         position_seconds=CASE WHEN listening_sessions.audio_version=EXCLUDED.audio_version THEN listening_sessions.position_seconds ELSE 0 END,
         bookmark_seconds=CASE WHEN listening_sessions.audio_version=EXCLUDED.audio_version THEN listening_sessions.bookmark_seconds ELSE NULL END,
@@ -148,13 +150,14 @@ export class Repository {
       return { session: sessionSchema.parse(updated.rows[0]) };
     });
   }
-  async completeTurn(owner: string, session: ListeningSession, requestId: string, output: Omit<TurnResult, 'requestId' | 'session'>) {
+  async completeTurn(owner: string, session: ListeningSession, requestId: string, output: Omit<TurnResult, 'requestId' | 'session'>, context?: ConversationContext) {
     return transaction(this.pool, async (client) => {
       const current = await this.session(owner, session.id, client, true);
       if (current.revision !== session.revision) throw stale();
       await this.validateSnapshot(client, current, session);
-      const result = await client.query(`UPDATE listening_sessions SET revision=revision+1,phase=$2,pending_action=$3,updated_at=now()
-        WHERE id=$1 RETURNING ${sessionColumns}`, [session.id, output.action ? 'paused' : 'speaking', JSON.stringify(output.action)]);
+      const result = await client.query(`UPDATE listening_sessions SET revision=revision+1,phase=$2,pending_action=$3,
+        conversation_context=COALESCE($4::jsonb,conversation_context),updated_at=now()
+        WHERE id=$1 RETURNING ${sessionColumns}`, [session.id, output.action ? 'paused' : 'speaking', JSON.stringify(output.action), context ? JSON.stringify({ audioVersion: session.audioVersion, value: context }) : null]);
       const turn: TurnResult = { ...output, requestId, session: sessionSchema.parse(result.rows[0]) };
       await client.query(`UPDATE conversation_turns SET status='complete',result=$3 WHERE session_id=$1 AND request_id=$2`, [session.id, requestId, JSON.stringify(turn)]);
       return turn;
@@ -195,7 +198,7 @@ export class Repository {
       return updated;
     });
   }
-  async evidence(session: ListeningSession, question: string): Promise<Evidence[]> {
+  async evidence(session: ListeningSession, question: string, rememberedIds: string[] = []): Promise<Evidence[]> {
     // Spoken questions contain conversational filler. Match any significant
     // lexeme so "jump to the discussion about pricing" can retrieve pricing
     // far from the bookmark without requiring every command word in a passage.
@@ -215,7 +218,39 @@ export class Repository {
       JOIN transcript_segments p ON p.episode_id=$2 AND p.audio_version=$3 AND p.id=e.value->>'id'
       ORDER BY e.ord LIMIT 3`, [session.id, session.episodeId, session.audioVersion, session.bookmarkSeconds]);
     const candidates: Evidence[] = result.rows;
-    return [...candidates, ...previous.rows.filter((item: Evidence) => !candidates.some((candidate) => candidate.id === item.id))];
+    const remembered = rememberedIds.length ? await this.pool.query(`SELECT id,start_seconds AS "startSeconds",end_seconds AS "endSeconds",text
+      FROM transcript_segments WHERE episode_id=$1 AND audio_version=$2 AND id=ANY($3::text[])`,
+    [session.episodeId, session.audioVersion, [...new Set(rememberedIds)].slice(-24)]) : { rows: [] };
+    return [...new Map([...candidates, ...previous.rows, ...remembered.rows].map((item: Evidence) => [item.id, item])).values()];
+  }
+  async conversationContext(session: ListeningSession): Promise<ConversationContext | undefined> {
+    const result = await this.pool.query('SELECT conversation_context FROM listening_sessions WHERE id=$1 AND audio_version=$2', [session.id, session.audioVersion]);
+    const saved = result.rows[0]?.conversation_context;
+    return saved?.audioVersion === session.audioVersion ? saved.value : undefined;
+  }
+  // Upgrade existing sessions without throwing away older discussion. Page the
+  // archive and compact incrementally; no unbounded transcript reaches a model.
+  async *conversationArchive(session: ListeningSession): AsyncGenerator<ContextExchange> {
+    let cursorTime = '1970-01-01'; let cursorId = '00000000-0000-0000-0000-000000000000';
+    while (true) {
+      const result = await this.pool.query(`SELECT question,result->>'answer' AS answer,result->'evidence' AS evidence,
+        created_at::text AS time,request_id AS id FROM conversation_turns
+        WHERE session_id=$1 AND status='complete' AND result#>>'{session,audioVersion}'=$2 AND result->>'answer' <> ''
+        AND (created_at,request_id)>($3::timestamptz,$4::uuid) ORDER BY created_at,request_id LIMIT 50`,
+      [session.id, session.audioVersion, cursorTime, cursorId]);
+      for (const row of result.rows) yield { question: row.question, answer: row.answer, evidenceIds: (row.evidence ?? []).map((item: Evidence) => item.id) };
+      if (result.rows.length < 50) return;
+      const last = result.rows.at(-1)!; cursorTime = last.time; cursorId = last.id;
+    }
+  }
+  async episodeDiscussion(owner: string, episodeId: string) {
+    const result = await this.pool.query(`SELECT s.audio_version AS "audioVersion",s.bookmark_seconds AS "bookmarkSeconds",s.phase,s.conversation_context
+      FROM listening_sessions s JOIN episodes e ON e.id=s.episode_id AND e.audio_version=s.audio_version
+      WHERE s.owner_id=$1 AND s.episode_id=$2`, [owner, episodeId]);
+    const row = result.rows[0];
+    if (!row?.conversation_context || row.conversation_context.audioVersion !== row.audioVersion) return undefined;
+    return { episodeId, audioVersion: row.audioVersion, bookmarkSeconds: row.bookmarkSeconds, phase: row.phase,
+      context: row.conversation_context.value as ConversationContext };
   }
   async history(sessionId: string): Promise<{ question: string; answer: string }[]> {
     const result = await this.pool.query(`SELECT t.question,t.result->>'answer' AS answer FROM conversation_turns t

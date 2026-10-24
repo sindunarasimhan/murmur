@@ -5,8 +5,9 @@ import { ServiceError } from './errors';
 import { fallbackResolution } from './catalog-fallback';
 import { CatalogDiscoveryMemory, type DiscoveryState } from './catalog-discovery';
 import { delegatedAnnouncement } from './catalog-labels';
+import type { CatalogContexts } from './catalog-context';
 
-type CatalogRepository = Pick<Repository, 'catalog' | 'unfinished' | 'charge'>;
+type CatalogRepository = Pick<Repository, 'catalog' | 'unfinished' | 'charge'> & Partial<Pick<Repository, 'episodeDiscussion'>>;
 
 function play(episode: PreparedEpisode, initialAction?: 'restart' | 'enable-ad-skipping' | 'skip-intro'): CatalogResolution {
   const detail = episode.guest ? `With ${episode.guest}.` : episode.title;
@@ -34,30 +35,34 @@ function clarification(episodes: PreparedEpisode[], candidateIds: string[] = [],
 
 export class CatalogService {
   constructor(private readonly repository: CatalogRepository, private readonly interpret: CatalogInterpreter,
-    private readonly discovery = new CatalogDiscoveryMemory()) {}
+    private readonly discovery = new CatalogDiscoveryMemory(), private readonly contexts?: CatalogContexts) {}
 
   forget(owner: string) { this.discovery.forget(owner); }
 
-  async resolve(owner: string, utterance: string, currentEpisodeId: string | undefined, history: string[], signal: AbortSignal): Promise<CatalogResolution> {
+  async resolve(owner: string, utterance: string, currentEpisodeId: string | undefined, history: string[], signal: AbortSignal, conversationId?: string): Promise<CatalogResolution> {
     signal.throwIfAborted();
-    const turn = this.discovery.begin(owner, currentEpisodeId, history);
+    const turn = this.contexts && conversationId ? await this.contexts.begin(owner, conversationId, currentEpisodeId, history, signal)
+      : this.discovery.begin(owner, currentEpisodeId, history);
     const episodes = await this.repository.catalog();
     if (!episodes.length) {
       throw new ServiceError(503, 'catalog_preparing', 'The podcast catalog is being prepared. Please try again shortly.');
     }
     const current = episodes.find((episode) => episode.id === currentEpisodeId);
+    const discussion = current ? await this.repository.episodeDiscussion?.(owner, current.id) : undefined;
     await this.repository.charge(owner);
     const intent = await this.interpret({
       utterance,
       currentEpisodeId: current?.id,
       history: turn.history,
       discovery: turn.state,
+      ...(turn.memory ? { memory: turn.memory } : {}),
+      ...(discussion ? { discussion } : {}),
       episodes: episodes.map(({ id, title, showTitle, guest, description, durationSeconds }) => ({ id, title, showTitle, guest, description, durationSeconds })),
     }, signal);
-    turn.assertCurrent(signal);
-    const finish = (result: CatalogResolution, state: DiscoveryState = turn.state): CatalogResolution => {
-      if (result.kind === 'clarify') turn.commit(utterance, result.message, state, signal);
-      else turn.clear(signal);
+    await turn.assertCurrent(signal);
+    const finish = async (result: CatalogResolution, state: DiscoveryState = turn.state): Promise<CatalogResolution> => {
+      if (result.kind === 'clarify') await turn.commit(utterance, result.message, state, signal);
+      else if (result.kind !== 'current') await turn.clear(signal);
       return result;
     };
 

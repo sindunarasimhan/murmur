@@ -63,7 +63,7 @@ test('every matching variant reaches interpretation with full text, history and 
     const choices: typeof askChoices = async <K extends string>(state: unknown, questions: Record<K, unknown>) => {
       calls++;
       const dialogue = [{ role: 'user', text: history[0] }, { role: 'assistant', text: history[1] }, { role: 'user', text: utterance }];
-      assert.deepEqual(state, { utterance, episodes, currentEpisodeId: 'orbit', recentOffers: [], history: calls === 1 ? dialogue : dialogue.slice(-2) });
+      assert.deepEqual(state, { utterance, episodes, currentEpisodeId: 'orbit', recentOffers: [], history: dialogue });
       if ('episode' in questions) {
         const question = questions.episode as { criteria: Record<string, string> };
         assert.deepEqual(Object.keys(question.criteria), [...episodes.map((episode) => episode.id), 'none']);

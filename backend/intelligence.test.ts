@@ -123,7 +123,7 @@ test('follow-up exploration carries conversation context without phrase-specific
   const choices: typeof askChoices = async <K extends string>(state: unknown, questions: Record<K, ChoiceQuestion>) => {
     observed = state;
     assert.match(questions['action' as K].instructions, /latest established discussion topic/i);
-    assert.match(questions['action' as K].criteria.deeper!, /latest history supplies the topic/i);
+    assert.match(questions['action' as K].criteria.deeper!, /history or memory supplies the topic/i);
     assert.doesNotMatch(questions['action' as K].instructions, /how do you develop that/i);
     assert.doesNotMatch(questions['action' as K].criteria.deeper!, /how to develop that/i);
     return Object.fromEntries(Object.entries<ChoiceQuestion>(questions).map(([key, question]) => {
